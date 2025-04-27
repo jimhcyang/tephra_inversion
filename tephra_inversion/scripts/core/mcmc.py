@@ -29,6 +29,15 @@ import subprocess
 from scipy.stats import norm, uniform
 from tqdm import tqdm
 import warnings
+import logging
+from pathlib import Path
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Suppress warnings for clarity
 warnings.filterwarnings("ignore")
@@ -261,15 +270,15 @@ def run_tephra2(config_path, sites_path, wind_path, output_path, tephra2_path, s
 
     Parameters
     ----------
-    config_path : str
+    config_path : str or Path
         Path to Tephra2 configuration file
-    sites_path : str
+    sites_path : str or Path
         Path to sites file
-    wind_path : str
+    wind_path : str or Path
         Path to wind profile file
-    output_path : str
+    output_path : str or Path
         Path where Tephra2 output will be saved
-    tephra2_path : str
+    tephra2_path : str or Path
         Path to Tephra2 executable
     silent : bool
         If True, suppresses Tephra2 console output
@@ -279,30 +288,52 @@ def run_tephra2(config_path, sites_path, wind_path, output_path, tephra2_path, s
     np.array
         The tephra deposit predictions from the output file
     """
+    # Convert paths to Path objects
+    config_path = Path(config_path)
+    sites_path = Path(sites_path)
+    wind_path = Path(wind_path)
+    output_path = Path(output_path)
+    tephra2_path = Path(tephra2_path)
+
+    # Verify all input files exist
+    for path, name in [(config_path, "config"), 
+                      (sites_path, "sites"),
+                      (wind_path, "wind"),
+                      (tephra2_path, "tephra2 executable")]:
+        if not path.exists():
+            raise FileNotFoundError(f"{name} file not found: {path}")
+
     # Construct the command
-    cmd = [tephra2_path, config_path, sites_path, wind_path]
+    cmd = [str(tephra2_path), str(config_path), str(sites_path), str(wind_path)]
     
     # Run Tephra2
-    with open(output_path, 'w') as f:
-        if silent:
-            subprocess.run(cmd, stdout=f, stderr=subprocess.DEVNULL)
-        else:
-            subprocess.run(cmd, stdout=f)
-    
-    # Read results (assuming columns: EAST, NORTH, ELEVATION, MASS, ...)
     try:
-        # Try to read the output file
-        output_data = np.genfromtxt(output_path, delimiter=' ')
+        with open(output_path, 'w') as f:
+            if silent:
+                subprocess.run(cmd, stdout=f, stderr=subprocess.DEVNULL, check=True)
+            else:
+                subprocess.run(cmd, stdout=f, check=True)
         
-        # Check if output data has at least 4 columns (EAST, NORTH, ELEV, MASS)
-        if output_data.shape[1] >= 4:
-            return output_data[:, 3]  # Return the mass column
-        else:
-            raise ValueError(f"Tephra2 output has fewer than 4 columns: {output_data.shape}")
+        # Read results (assuming columns: EAST, NORTH, ELEVATION, MASS, ...)
+        try:
+            output_data = np.genfromtxt(output_path, delimiter=' ')
+            
+            # Check if output data has at least 4 columns (EAST, NORTH, ELEV, MASS)
+            if output_data.shape[1] >= 4:
+                return output_data[:, 3]  # Return the mass column
+            else:
+                raise ValueError(f"Tephra2 output has fewer than 4 columns: {output_data.shape}")
+        except Exception as e:
+            logger.error(f"Error reading Tephra2 output: {e}")
+            # Return zeros as a fallback (but this indicates a problem)
+            return np.zeros(100)  # Arbitrary size, should be replaced with actual expected size
+            
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Tephra2 execution failed: {e}")
+        raise
     except Exception as e:
-        print(f"Error reading Tephra2 output: {e}")
-        # Return zeros as a fallback (but this indicates a problem)
-        return np.zeros(100)  # Arbitrary size, should be replaced with actual expected size
+        logger.error(f"Unexpected error in run_tephra2: {e}")
+        raise
 
 
 def compute_posterior(input_params, config_path, sites_path, wind_path, 
@@ -373,9 +404,9 @@ def metropolis_hastings(input_params, prior_type, draw_scale, prior_para,
         Step sizes for parameter proposals.
     prior_para : array-like
         Prior distribution parameters.
-    config_path, sites_path, wind_path, output_path : str
+    config_path, sites_path, wind_path, output_path : str or Path
         Paths to Tephra2 input/output files
-    tephra2_path : str
+    tephra2_path : str or Path
         Path to Tephra2 executable
     runs : int
         Number of MCMC iterations.
@@ -401,69 +432,85 @@ def metropolis_hastings(input_params, prior_type, draw_scale, prior_para,
     likeli_array : (runs+1) np.array
         Log-likelihood sums for each iteration.
     """
-    # 1. Initialize storage
-    n_params = len(input_params)
-    chain = np.zeros((runs + 1, n_params))
-    post_chain = np.zeros(runs + 1)
-    prior_array = np.zeros(runs + 1)
-    likeli_array = np.zeros(runs + 1)
-    
-    # 2. Set initial state
-    chain[0] = input_params
-    
-    # 3. Compute initial posterior
-    posterior_temp, likelihood_temp, prior_temp = compute_posterior(
-        input_params, config_path, sites_path, wind_path, output_path,
-        tephra2_path, observation, likelihood_scale, prior_type, prior_para, silent
-    )
-    
-    post_chain[0] = posterior_temp
-    prior_array[0] = np.sum(prior_temp)
-    likeli_array[0] = np.sum(likelihood_temp)
-    
-    acceptance_count = 0
-    
-    # 4. Main MCMC loop
-    for i in tqdm(range(1, runs + 1), desc="MCMC Progress"):
-        # 4.1. Propose new sample
-        params_temp = draw_input_parameter(
-            chain[i-1], prior_type, draw_scale, prior_para
-        )
+    try:
+        # 1. Initialize storage
+        n_params = len(input_params)
+        chain = np.zeros((runs + 1, n_params))
+        post_chain = np.zeros(runs + 1)
+        prior_array = np.zeros(runs + 1)
+        likeli_array = np.zeros(runs + 1)
         
-        # 4.2. Compute new posterior
-        posterior_new, likelihood_new, prior_new = compute_posterior(
-            params_temp, config_path, sites_path, wind_path, output_path,
+        # 2. Set initial state
+        chain[0] = input_params
+        
+        # 3. Compute initial posterior
+        posterior_temp, likelihood_temp, prior_temp = compute_posterior(
+            input_params, config_path, sites_path, wind_path, output_path,
             tephra2_path, observation, likelihood_scale, prior_type, prior_para, silent
         )
         
-        # 4.3. Accept/reject step
-        if not np.isfinite(posterior_new):
-            # Automatically reject invalid proposals
-            acceptance_prob = 0
-        else:
-            # Standard Metropolis acceptance probability
-            acceptance_prob = min(1.0, 10**(posterior_new - posterior_temp))
+        post_chain[0] = posterior_temp
+        prior_array[0] = np.sum(prior_temp)
+        likeli_array[0] = np.sum(likelihood_temp)
         
-        if np.random.rand() < acceptance_prob:
-            # Accept the proposal
-            chain[i] = params_temp
-            post_chain[i] = posterior_new
-            posterior_temp = posterior_new
-            prior_array[i] = np.sum(prior_new)
-            likeli_array[i] = np.sum(likelihood_new)
-            acceptance_count += 1
-        else:
-            # Reject the proposal, keep previous state
-            chain[i] = chain[i-1]
-            post_chain[i] = post_chain[i-1]
-            prior_array[i] = prior_array[i-1]
-            likeli_array[i] = likeli_array[i-1]
+        acceptance_count = 0
         
-        # 4.4. Periodic reporting
-        if i % check_snapshot == 0:
-            print(f"Iteration {i}/{runs}: Acceptance Rate = {acceptance_count / i:.4f}")
-    
-    return chain, post_chain, acceptance_count, prior_array, likeli_array
+        # 4. Main MCMC loop
+        for i in tqdm(range(1, runs + 1), desc="MCMC Progress"):
+            try:
+                # 4.1. Propose new sample
+                params_temp = draw_input_parameter(
+                    chain[i-1], prior_type, draw_scale, prior_para
+                )
+                
+                # 4.2. Compute new posterior
+                posterior_new, likelihood_new, prior_new = compute_posterior(
+                    params_temp, config_path, sites_path, wind_path, output_path,
+                    tephra2_path, observation, likelihood_scale, prior_type, prior_para, silent
+                )
+                
+                # 4.3. Accept/reject step
+                if not np.isfinite(posterior_new):
+                    # Automatically reject invalid proposals
+                    acceptance_prob = 0
+                    logger.warning(f"Invalid proposal at iteration {i}: non-finite posterior")
+                else:
+                    # Standard Metropolis acceptance probability
+                    acceptance_prob = min(1.0, 10**(posterior_new - posterior_temp))
+                
+                if np.random.rand() < acceptance_prob:
+                    # Accept the proposal
+                    chain[i] = params_temp
+                    post_chain[i] = posterior_new
+                    posterior_temp = posterior_new
+                    prior_array[i] = np.sum(prior_new)
+                    likeli_array[i] = np.sum(likelihood_new)
+                    acceptance_count += 1
+                else:
+                    # Reject the proposal, keep previous state
+                    chain[i] = chain[i-1]
+                    post_chain[i] = post_chain[i-1]
+                    prior_array[i] = prior_array[i-1]
+                    likeli_array[i] = likeli_array[i-1]
+                
+                # 4.4. Periodic reporting
+                if i % check_snapshot == 0:
+                    logger.info(f"Iteration {i}/{runs}: Acceptance Rate = {acceptance_count / i:.4f}")
+                    
+            except Exception as e:
+                logger.error(f"Error in MCMC iteration {i}: {e}")
+                # Keep previous state on error
+                chain[i] = chain[i-1]
+                post_chain[i] = post_chain[i-1]
+                prior_array[i] = prior_array[i-1]
+                likeli_array[i] = likeli_array[i-1]
+        
+        logger.info(f"MCMC completed with final acceptance rate: {acceptance_count / runs:.4f}")
+        return chain, post_chain, acceptance_count, prior_array, likeli_array
+        
+    except Exception as e:
+        logger.error(f"Fatal error in MCMC: {e}")
+        raise
 
 
 if __name__ == "__main__":

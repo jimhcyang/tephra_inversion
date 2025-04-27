@@ -1,0 +1,178 @@
+# Default configuration for tephra inversion
+
+# Vent location and eruption time
+vent:
+  latitude: 31.93
+  longitude: 130.93
+  elevation: 0.0  # meters above sea level
+
+eruption:
+  time: ["2011", "06", "04", "15:00"]  # YYYY, MM, DD, HH:MM
+
+# Input data paths
+data:
+  input:
+    wind: "data/input/wind.txt"
+    observations: "data/input/observations.csv"
+    sites: "data/input/sites.csv"
+  output:
+    plots: "data/output/plots/"
+    mcmc: "data/output/mcmc/"
+
+# Tephra2 model parameters
+tephra2:
+  executable: "tephra2/tephra2_2020"
+  config_template: "config/tephra2_config.yaml"
+  output_file: "data/output/tephra2_output.txt"
+
+# Parameter ranges for LHS
+parameters:
+  variable:
+    column_height:
+      min: 5000
+      max: 20000
+      initial: 7500
+    log_m:
+      min: 20
+      max: 25
+      initial: 22.5
+    alpha:
+      min: 1
+      max: 5
+      initial: 4
+    beta:
+      min: 2
+      max: 5
+      initial: 2.0
+  fixed:
+    vent_easting: 0.0
+    vent_northing: 0.0
+    vent_elevation: 0.0
+    max_grainsize: 6
+    min_grainsize: -6
+    median_grainsize: -1
+    std_grainsize: 1.5
+    eddy_const: 0.04
+    diffusion_coefficient: 5000
+    fall_time_threshold: 1419
+    lithic_density: 2500
+    pumice_density: 1100
+    col_steps: 100
+    part_steps: 100
+    plume_model: 2
+
+# MCMC settings
+mcmc:
+  n_iterations: 10000
+  n_burnin: 1000
+  n_thin: 10
+  proposal_scale: 0.1
+  seed: 42
+
+# LHS settings
+lhs:
+  n_samples: 1000
+  top_fraction: 0.05
+  n_grid_points: 20
+  seed: 42
+
+# Visualization settings
+visualization:
+  plot_format: "png"
+  dpi: 300
+  figsize: [10, 8]
+  colormap: "viridis"
+
+# Wind data
+wind:
+  data_source: "generate"  # "generate" or "download"
+  params:
+    wind_direction: 150
+    max_wind_speed: 30
+    elevation_max_speed: 5000
+    zero_elevation: 0
+
+# Observation data
+observations:
+  data_source: "generate"  # "generate" or "load"
+  n_points: 100
+  noise_level: 0.1
+
+# Parameter priors
+priors:
+  plume_height:
+    distribution: "gaussian"
+    mean: 15000
+    std: 2000
+  mass:
+    distribution: "gaussian"
+    mean: 1e11
+    std: 1e10
+  phi:
+    distribution: "uniform"
+    min: 1
+    max: 5
+  wind_adjustment:
+    distribution: "gaussian"
+    mean: 1.0
+    std: 0.1
+
+# Fixed parameters
+fixed_params:
+  diffusion_coefficient: 1000
+  fall_time_threshold: 100
+
+# Parameter ranges for LHS
+plume_range: [5000, 20000]  # min, max plume height
+logm_range: [20, 25]        # min, max log eruption mass
+
+# LHS configuration
+lhs_config:
+  n_lhs: 1000
+  top_frac: 0.05
+  n_ult_grid: 20
+  lhs_seed: 42
+
+# MCMC configuration
+mcmc_config:
+  runs: 10000
+  burn_in_fraction: 0.5
+  likelihood_scale: 1.0
+  check_snapshot: 500
+  silent: true
+
+# File paths
+paths:
+  root: "tephra_inversion"
+  tephra2_path: "tephra2/tephra2_2020"
+  config_template: "templates/config_template.txt"
+  wind_template: "templates/wind_template.txt"
+  input_dir: "data/input"
+  output_dir: "output"
+  plots_dir: "output/plots"
+  mcmc_dir: "output/mcmc"
+  dem_file: "data/input/dem.tif"  # Optional DEM file for background
+
+# Input files
+input_files:
+  observations: "data/input/observations.csv"
+  sites: "data/input/sites.csv"
+  esp_input: "data/input/esp_input.csv"
+  wind: "data/input/wind.txt"
+
+# Output directory
+output_dir: output
+
+# MCMC parameters
+n_iterations: 10000
+burn_in: 2000
+thin: 5
+
+# Plot settings
+plot_dpi: 300
+plot_format: png
+
+# Tephra2 parameters
+vent_easting: 0.0
+vent_northing: 0.0
+vent_elevation: 0.0
