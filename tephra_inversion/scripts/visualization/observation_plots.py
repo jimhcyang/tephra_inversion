@@ -14,13 +14,13 @@ class ObservationPlotter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def plot_tephra_distribution(self,
-                               eastings: np.ndarray,
-                               northings: np.ndarray,
-                               thicknesses: np.ndarray,
-                               vent_location: Tuple[float, float],
-                               title: str = "Tephra Deposit Distribution",
-                               save_path: Optional[Union[str, Path]] = None,
-                               show_plot: bool = False) -> str:
+                            eastings: np.ndarray,
+                            northings: np.ndarray,
+                            thicknesses: np.ndarray,
+                            vent_location: Tuple[float, float],
+                            title: str = "Tephra Deposit Distribution",
+                            save_path: Optional[Union[str, Path]] = None,
+                            show_plot: bool = True) -> str:
         """
         Plot tephra deposit thickness distribution.
         
@@ -39,7 +39,7 @@ class ObservationPlotter:
         save_path : Optional[str or Path]
             Path to save the plot. If None, uses default output directory
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -51,7 +51,7 @@ class ObservationPlotter:
         # Create scatter plot with log-scaled colors
         norm = mcolors.LogNorm(vmin=max(thicknesses.min(), 0.001), vmax=thicknesses.max())
         scatter = ax.scatter(eastings, northings, c=thicknesses,
-                           cmap='RdBu_r', norm=norm, alpha=0.7, s=30)
+                        cmap='RdBu_r', norm=norm, alpha=0.7, s=30)
         
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax)
@@ -80,7 +80,7 @@ class ObservationPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:

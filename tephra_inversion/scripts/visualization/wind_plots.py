@@ -13,12 +13,12 @@ class WindPlotter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
     def plot_wind_profile(self, 
-                         heights: np.ndarray,
-                         speeds: np.ndarray,
-                         directions: np.ndarray,
-                         title: str = "Wind Profile",
-                         save_path: Optional[Union[str, Path]] = None,
-                         show_plot: bool = False) -> str:
+                        heights: np.ndarray,
+                        speeds: np.ndarray,
+                        directions: np.ndarray,
+                        title: str = "Wind Profile",
+                        save_path: Optional[Union[str, Path]] = None,
+                        show_plot: bool = True) -> str:
         """
         Plot wind speed and direction profiles.
         
@@ -35,7 +35,7 @@ class WindPlotter:
         save_path : Optional[str or Path]
             Path to save the plot. If None, uses default output directory
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -76,21 +76,22 @@ class WindPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:
             plt.close()
             
         return str(save_path)
-    
+
+
     def plot_wind_rose(self,
-                      directions: np.ndarray,
-                      speeds: np.ndarray,
-                      heights: np.ndarray,
-                      title: str = "Wind Rose",
-                      save_path: Optional[Union[str, Path]] = None,
-                      show_plot: bool = False) -> str:
+                    directions: np.ndarray,
+                    speeds: np.ndarray,
+                    heights: np.ndarray,
+                    title: str = "Wind Rose",
+                    save_path: Optional[Union[str, Path]] = None,
+                    show_plot: bool = True) -> str:
         """
         Plot wind rose diagram with elevation on radial axis and speed as color.
         
@@ -107,7 +108,7 @@ class WindPlotter:
         save_path : Optional[str or Path]
             Path to save the plot. If None, uses default output directory
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -127,7 +128,7 @@ class WindPlotter:
         
         # Plot wind directions and heights with speed-based coloring
         scatter = ax.scatter(directions_rad, heights, c=speeds, cmap=cmap,
-                           s=50, alpha=0.7, norm=norm)
+                        s=50, alpha=0.7, norm=norm)
         
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax)
@@ -150,7 +151,7 @@ class WindPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:

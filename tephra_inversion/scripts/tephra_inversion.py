@@ -148,20 +148,22 @@ class TephraInversion:
             speeds = self.wind_data["SPEED"].values
             directions = self.wind_data["DIRECTION"].values
             
-            # Create profile plot
+            # Create profile plot - set show_plot=True to display in notebook
             profile_path = self.wind_plotter.plot_wind_profile(
                 heights, 
                 speeds, 
                 directions,
-                save_path=Path(self.config["paths"]["plots_dir"]) / "wind_profile.png"
+                save_path=Path(self.config["paths"]["plots_dir"]) / "wind_profile.png",
+                show_plot=True
             )
             
-            # Create wind rose plot
+            # Create wind rose plot - set show_plot=True to display in notebook
             rose_path = self.wind_plotter.plot_wind_rose(
                 directions,
                 speeds,
                 heights,
-                save_path=Path(self.config["paths"]["plots_dir"]) / "wind_rose.png"
+                save_path=Path(self.config["paths"]["plots_dir"]) / "wind_rose.png",
+                show_plot=True
             )
             
             print(f"Wind profile plot saved to: {profile_path}")
@@ -218,9 +220,8 @@ class TephraInversion:
         if obs_file.exists() and sites_file.exists():
             print(f"Found existing observation data at: {obs_file} and {sites_file}")
             try:
-                # Load observations and sites
-                self.observations = np.loadtxt(obs_file)
-                self.sites = np.loadtxt(sites_file)
+                # Use the ObservationHandler to load the files consistently
+                self.observations, self.sites = self.obs_handler.load_observations()
                 print("Successfully loaded observation data.")
                 
                 # If we don't have vent location, try to infer from sites
@@ -248,20 +249,24 @@ class TephraInversion:
                 sites_file_input = input("Enter path to sites file: ")
                 
                 try:
-                    # Load observations
-                    self.observations = np.loadtxt(obs_file_input)
-                    
-                    # Load sites
-                    self.sites = np.loadtxt(sites_file_input)
+                    # Use the ObservationHandler to load the files
+                    self.observations, self.sites = self.obs_handler.load_observations(
+                        obs_filename=obs_file_input,
+                        sites_filename=sites_file_input
+                    )
                     
                     print(f"Observation data loaded from: {obs_file_input}")
                     print(f"Sites data loaded from: {sites_file_input}")
                     
                     # Save to standard location if needed
-                    if obs_file_input != str(obs_file):
-                        np.savetxt(obs_file, self.observations, fmt='%.6f')
-                    if sites_file_input != str(sites_file):
-                        np.savetxt(sites_file, self.sites, fmt='%.1f')
+                    if obs_file_input != str(obs_file) or sites_file_input != str(sites_file):
+                        # Use the ObservationHandler to save the files consistently
+                        self.obs_handler.save_observations(
+                            self.observations, 
+                            self.sites,
+                            obs_filename="observations.csv",
+                            sites_filename="sites.csv"
+                        )
                 except Exception as e:
                     print(f"Error loading observation data: {e}")
                     self._generate_synthetic_observations()
@@ -380,7 +385,13 @@ class TephraInversion:
         if not Path(wind_path).exists():
             self.wind_handler.save_wind_data(self.wind_data, wind_path)
         if not Path(sites_path).exists():
-            np.savetxt(sites_path, self.sites, fmt='%.1f')
+            # Use ObservationHandler to save sites with proper comma delimiter
+            self.obs_handler.save_observations(
+                self.observations,
+                self.sites,
+                obs_filename="observations.csv",
+                sites_filename="sites.csv"
+            )
         
         # Run MCMC
         print("\nRunning MCMC parameter estimation...")
@@ -412,28 +423,31 @@ class TephraInversion:
         # Create chain dictionary for plotting
         chain_dict = {name: chain[:, i] for i, name in enumerate(param_names)}
         
-        # Plot diagnostic plots
+        # Plot diagnostic plots - set show_plot=True to display in notebook
         burnin = self.config["mcmc"]["n_burnin"]
         
         # Trace plots
         trace_path = self.diag_plotter.plot_trace(
             chain_dict, 
             burnin=burnin,
-            save_path=Path(self.config["paths"]["plots_dir"]) / "trace_plots.png"
+            save_path=Path(self.config["paths"]["plots_dir"]) / "trace_plots.png",
+            show_plot=True
         )
         
         # Distribution plots
         dist_path = self.diag_plotter.plot_parameter_distributions(
             chain_dict, 
             burnin=burnin,
-            save_path=Path(self.config["paths"]["plots_dir"]) / "parameter_distributions.png"
+            save_path=Path(self.config["paths"]["plots_dir"]) / "parameter_distributions.png",
+            show_plot=True
         )
         
         # Correlation plots
         corr_path = self.diag_plotter.plot_parameter_correlations(
             chain_dict, 
             burnin=burnin,
-            save_path=Path(self.config["paths"]["plots_dir"]) / "parameter_correlations.png"
+            save_path=Path(self.config["paths"]["plots_dir"]) / "parameter_correlations.png",
+            show_plot=True
         )
         
         print(f"Diagnostic plots saved to:\n{trace_path}\n{dist_path}\n{corr_path}")
@@ -461,11 +475,12 @@ class TephraInversion:
             silent=True
         )
         
-        # Plot tephra distribution comparison
+        # Plot tephra distribution comparison - set show_plot=True to display in notebook
         comp_path = self.diag_plotter.plot_tephra_distribution_comparison(
             self.observations,
             predictions,
-            save_path=Path(self.config["paths"]["plots_dir"]) / "tephra_comparison.png"
+            save_path=Path(self.config["paths"]["plots_dir"]) / "tephra_comparison.png",
+            show_plot=True
         )
         print(f"Tephra distribution comparison saved to: {comp_path}")
         
@@ -496,38 +511,5 @@ class TephraInversion:
         print(f"Eruption Mass: {10 ** best_params_dict['log_m']:.2e} kg")
         print(f"Acceptance Rate: {results['acceptance_rate']:.2f}")
         print(f"Results saved to: {results_file}")
-        
-        return results
-    
-    def run_workflow(self) -> Dict:
-        """
-        Run the complete workflow with user inputs.
-        
-        Returns
-        -------
-        Dict
-            Results of the inversion
-        """
-        # Get vent location
-        lat = float(input("Enter vent latitude (degrees): "))
-        lon = float(input("Enter vent longitude (degrees): "))
-        elev_input = input("Enter vent elevation in meters (default: 0.0): ")
-        elevation = float(elev_input) if elev_input.strip() else 0.0
-        
-        self.setup_vent_location(lat, lon, elevation)
-        
-        # Get eruption time
-        year = input("Enter eruption year (YYYY): ")
-        month = input("Enter eruption month (MM): ")
-        day = input("Enter eruption day (DD): ")
-        time = input("Enter eruption time (HH:MM): ")
-        self.setup_eruption_time([year, month, day, time])
-        
-        # Setup wind data and observation data with automatic checks for existing files
-        self.setup_wind_data()
-        self.setup_observation_data()
-        
-        # Run inversion
-        results = self.run_inversion()
         
         return results

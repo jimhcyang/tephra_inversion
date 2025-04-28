@@ -20,13 +20,13 @@ class DiagnosticPlotter:
         plt.rc('figure', titlesize=14)
         plt.rc('axes', labelsize=12)
         plt.rc('axes', titlesize=14)
-    
+        
     def plot_trace(self,
-                  samples: Dict[str, np.ndarray],
-                  burnin: int = 0,
-                  title: str = "MCMC Trace Plots",
-                  save_path: Optional[Union[str, Path]] = None,
-                  show_plot: bool = False) -> str:
+                samples: Dict[str, np.ndarray],
+                burnin: int = 0,
+                title: str = "MCMC Trace Plots",
+                save_path: Optional[Union[str, Path]] = None,
+                show_plot: bool = True) -> str:
         """
         Plot trace plots for MCMC parameters.
         
@@ -41,7 +41,7 @@ class DiagnosticPlotter:
         save_path : Optional[str or Path]
             Path to save the plot
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -74,20 +74,21 @@ class DiagnosticPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:
             plt.close()
             
         return str(save_path)
-    
+
+
     def plot_parameter_distributions(self,
-                                   samples: Dict[str, np.ndarray],
-                                   burnin: int = 0,
-                                   title: str = "Parameter Distributions",
-                                   save_path: Optional[Union[str, Path]] = None,
-                                   show_plot: bool = False) -> str:
+                                samples: Dict[str, np.ndarray],
+                                burnin: int = 0,
+                                title: str = "Parameter Distributions",
+                                save_path: Optional[Union[str, Path]] = None,
+                                show_plot: bool = True) -> str:
         """
         Plot parameter distributions with KDE and histograms.
         
@@ -102,7 +103,7 @@ class DiagnosticPlotter:
         save_path : Optional[str or Path]
             Path to save the plot
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -134,20 +135,21 @@ class DiagnosticPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:
             plt.close()
             
         return str(save_path)
-    
+
+
     def plot_parameter_correlations(self,
-                                  samples: Dict[str, np.ndarray],
-                                  burnin: int = 0,
-                                  title: str = "Parameter Correlations",
-                                  save_path: Optional[Union[str, Path]] = None,
-                                  show_plot: bool = False) -> str:
+                                samples: Dict[str, np.ndarray],
+                                burnin: int = 0,
+                                title: str = "Parameter Correlations",
+                                save_path: Optional[Union[str, Path]] = None,
+                                show_plot: bool = True) -> str:
         """
         Plot parameter correlation matrix and scatter plots.
         
@@ -162,7 +164,7 @@ class DiagnosticPlotter:
         save_path : Optional[str or Path]
             Path to save the plot
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -201,20 +203,21 @@ class DiagnosticPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:
             plt.close()
             
         return str(save_path)
-    
+
+
     def plot_tephra_distribution_comparison(self,
-                                          observed: np.ndarray,
-                                          predicted: np.ndarray,
-                                          title: str = "Tephra Distribution Comparison",
-                                          save_path: Optional[Union[str, Path]] = None,
-                                          show_plot: bool = False) -> str:
+                                        observed: np.ndarray,
+                                        predicted: np.ndarray,
+                                        title: str = "Tephra Distribution Comparison",
+                                        save_path: Optional[Union[str, Path]] = None,
+                                        show_plot: bool = True) -> str:
         """
         Plot comparison between observed and predicted tephra distributions.
         
@@ -229,7 +232,7 @@ class DiagnosticPlotter:
         save_path : Optional[str or Path]
             Path to save the plot
         show_plot : bool
-            Whether to display the plot interactively
+            Whether to display the plot interactively (default: True)
             
         Returns
         -------
@@ -240,8 +243,8 @@ class DiagnosticPlotter:
         
         # Histogram comparison
         bins = np.logspace(np.log10(min(observed.min(), predicted.min())),
-                          np.log10(max(observed.max(), predicted.max())),
-                          50)
+                        np.log10(max(observed.max(), predicted.max())),
+                        50)
         ax1.hist(observed, bins=bins, alpha=0.5, label='Observed', density=True)
         ax1.hist(predicted, bins=bins, alpha=0.5, label='Predicted', density=True)
         ax1.set_xscale('log')
@@ -278,7 +281,7 @@ class DiagnosticPlotter:
         # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         
-        # Show the plot if requested
+        # Show the plot if requested (default is now True)
         if show_plot:
             plt.show()
         else:
