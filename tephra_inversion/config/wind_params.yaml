@@ -1,5 +1,0 @@
-source: synthetic
-wind_direction: 150.0
-max_wind_speed: 30.0
-elevation_max_speed: 5000.0
-zero_elevation: 0.0 

@@ -29,9 +29,9 @@ class Tephra2Interface:
                 "ELEVATION": vent_location[2]
             },
             "WIND_DATA": {
-                "HEIGHTS": wind_data[:, 0].tolist(),
-                "SPEEDS": wind_data[:, 1].tolist(),
-                "DIRECTIONS": wind_data[:, 2].tolist()
+                "HEIGHTS": wind_data.iloc[:, 0].tolist(),
+                "SPEEDS": wind_data.iloc[:, 1].tolist(),
+                "DIRECTIONS": wind_data.iloc[:, 2].tolist()
             },
             "OUTPUT": {
                 "PATH": str(output_path.parent),
