@@ -1,12 +1,11 @@
+# scripts/visualization/observation_plots.py
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Optional, Tuple, List
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
+from typing import Optional, Tuple, List, Union
 import matplotlib.colors as mcolors
-import matplotlib.cm as cm
 
 class ObservationPlotter:
     def __init__(self, output_dir: str = "data/output/plots"):
@@ -20,7 +19,8 @@ class ObservationPlotter:
                                thicknesses: np.ndarray,
                                vent_location: Tuple[float, float],
                                title: str = "Tephra Deposit Distribution",
-                               save_path: Optional[str] = None) -> None:
+                               save_path: Optional[Union[str, Path]] = None,
+                               show_plot: bool = False) -> str:
         """
         Plot tephra deposit thickness distribution.
         
@@ -36,22 +36,29 @@ class ObservationPlotter:
             (easting, northing) coordinates of vent
         title : str
             Plot title
-        save_path : Optional[str]
+        save_path : Optional[str or Path]
             Path to save the plot. If None, uses default output directory
+        show_plot : bool
+            Whether to display the plot interactively
+            
+        Returns
+        -------
+        str
+            Path where the plot was saved
         """
         fig, ax = plt.subplots(figsize=(10, 8))
         
         # Create scatter plot with log-scaled colors
-        norm = mcolors.LogNorm(vmin=thicknesses.min(), vmax=thicknesses.max())
+        norm = mcolors.LogNorm(vmin=max(thicknesses.min(), 0.001), vmax=thicknesses.max())
         scatter = ax.scatter(eastings, northings, c=thicknesses,
-                           cmap='RdBu_r', norm=norm, alpha=0.7)
+                           cmap='RdBu_r', norm=norm, alpha=0.7, s=30)
         
         # Add colorbar
         cbar = plt.colorbar(scatter, ax=ax)
         cbar.set_label('Deposit Thickness (kg/m²)')
         
         # Add vent location
-        ax.plot(vent_location[0], vent_location[1], 'r^', markersize=10,
+        ax.plot(vent_location[0], vent_location[1], 'r^', markersize=12,
                 label='Vent Location')
         
         # Add labels and title
@@ -61,31 +68,22 @@ class ObservationPlotter:
         ax.legend()
         ax.grid(True)
         
+        # Set save path
         if save_path is None:
             save_path = self.output_dir / "tephra_distribution.png"
+        else:
+            save_path = Path(save_path)
+            
+        # Make sure directory exists
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+        # Save the plot
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()  # Display the plot
-        plt.close()
-
-def main():
-    """Example usage of ObservationPlotter."""
-    # Create plotter instance
-    plotter = ObservationPlotter()
-    
-    # Example data
-    n_points = 100
-    eastings = np.random.normal(0, 10000, n_points)
-    northings = np.random.normal(0, 10000, n_points)
-    thicknesses = np.random.lognormal(0, 1, n_points)
-    vent_location = (0, 0)
-    
-    # Plot tephra distribution
-    plotter.plot_tephra_distribution(eastings, northings, thicknesses, vent_location)
-    
-    # Example map data
-    lats = np.random.normal(31.93, 0.1, n_points)
-    lons = np.random.normal(130.93, 0.1, n_points)
-    vent_lat, vent_lon = 31.93, 130.93
-
-if __name__ == "__main__":
-    main()
+        
+        # Show the plot if requested
+        if show_plot:
+            plt.show()
+        else:
+            plt.close()
+            
+        return str(save_path)

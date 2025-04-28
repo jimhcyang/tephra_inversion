@@ -1,171 +1,160 @@
+# scripts/core/tephra2_interface.py
+
 import os
 import subprocess
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from typing import Dict, Union, Optional, List, Tuple
-import yaml
 
 class Tephra2Interface:
     def __init__(self, 
                  tephra2_path: Union[str, Path] = "tephra2/tephra2_2020",
-                 config_dir: Union[str, Path] = "config",
-                 output_dir: Union[str, Path] = "output"):
+                 config_dir: Union[str, Path] = "data/input",
+                 output_dir: Union[str, Path] = "data/output"):
         self.tephra2_path = Path(tephra2_path)
         self.config_dir = Path(config_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
     
-    def create_config(self, 
-                     vent_location: Tuple[float, float, float],
-                     wind_data: np.ndarray,
-                     output_path: Union[str, Path]) -> None:
-        """Create Tephra2 configuration file."""
-        output_path = Path(output_path)
-        
-        config = {
-            "VENT_LOCATION": {
-                "EASTING": vent_location[0],
-                "NORTHING": vent_location[1],
-                "ELEVATION": vent_location[2]
-            },
-            "WIND_DATA": {
-                "HEIGHTS": wind_data.iloc[:, 0].tolist(),
-                "SPEEDS": wind_data.iloc[:, 1].tolist(),
-                "DIRECTIONS": wind_data.iloc[:, 2].tolist()
-            },
-            "OUTPUT": {
-                "PATH": str(output_path.parent),
-                "FILENAME": output_path.name
-            }
-        }
-        
-        config_path = self.config_dir / "tephra2_config.yaml"
-        with open(config_path, 'w') as f:
-            yaml.dump(config, f)
-        
-        return config_path
-    
     def run_tephra2(self, 
                    config_path: Union[str, Path],
-                   params: Dict[str, float]) -> np.ndarray:
-        """Run Tephra2 with given parameters."""
-        # Create parameter file
-        param_path = self.config_dir / "tephra2_params.txt"
-        with open(param_path, 'w') as f:
-            for name, value in params.items():
-                f.write(f"{name} {value}\n")
+                   sites_path: Union[str, Path],
+                   wind_path: Union[str, Path],
+                   output_path: Union[str, Path],
+                   silent: bool = True) -> np.ndarray:
+        """
+        Execute Tephra2 with the given input files.
+        
+        Parameters
+        ----------
+        config_path : str or Path
+            Path to Tephra2 configuration file
+        sites_path : str or Path
+            Path to sites file
+        wind_path : str or Path
+            Path to wind profile file
+        output_path : str or Path
+            Path where Tephra2 output will be saved
+        silent : bool
+            If True, suppresses Tephra2 console output
+            
+        Returns
+        -------
+        np.ndarray
+            Tephra deposit predictions
+        """
+        # Verify all input files exist
+        for path, name in [(config_path, "config"), 
+                          (sites_path, "sites"),
+                          (wind_path, "wind")]:
+            if not Path(path).exists():
+                raise FileNotFoundError(f"{name} file not found: {path}")
+                
+        if not self.tephra2_path.exists():
+            raise FileNotFoundError(f"Tephra2 executable not found: {self.tephra2_path}")
+
+        # Construct the command
+        cmd = [str(self.tephra2_path), str(config_path), str(sites_path), str(wind_path)]
         
         # Run Tephra2
-        cmd = [
-            str(self.tephra2_path),
-            str(config_path),
-            str(param_path)
-        ]
-        
         try:
-            result = subprocess.run(cmd, 
-                                  capture_output=True, 
-                                  text=True, 
-                                  check=True)
-            print("Tephra2 run successful")
+            with open(output_path, 'w') as f:
+                if silent:
+                    subprocess.run(cmd, stdout=f, stderr=subprocess.DEVNULL, check=True)
+                else:
+                    subprocess.run(cmd, stdout=f, check=True)
+            
+            # Read results (assuming columns: EAST, NORTH, ELEVATION, MASS, ...)
+            output_data = np.genfromtxt(output_path, delimiter=' ')
+            
+            # Check if output data has at least 4 columns (EAST, NORTH, ELEV, MASS)
+            if output_data.shape[1] >= 4:
+                return output_data[:, 3]  # Return the mass column
+            else:
+                raise ValueError(f"Tephra2 output has fewer than 4 columns: {output_data.shape}")
+                
         except subprocess.CalledProcessError as e:
-            print(f"Tephra2 run failed: {e.stderr}")
+            print(f"Tephra2 execution failed: {e}")
             raise
-        
-        # Parse output
-        output_path = Path(config_path).parent / "output.txt"
-        if not output_path.exists():
-            raise FileNotFoundError(f"Tephra2 output file not found: {output_path}")
-        
-        return self._parse_output(output_path)
-    
-    def _parse_output(self, output_path: Union[str, Path]) -> np.ndarray:
-        """Parse Tephra2 output file."""
-        data = []
-        with open(output_path, 'r') as f:
-            for line in f:
-                if line.startswith('#'):
-                    continue
-                try:
-                    easting, northing, loading = map(float, line.split())
-                    data.append([easting, northing, loading])
-                except ValueError:
-                    continue
-        
-        return np.array(data)
-    
-    def calculate_likelihood(self, 
-                           model_output: np.ndarray,
-                           observations: np.ndarray,
-                           sites: np.ndarray,
-                           sigma: float = 0.1) -> float:
-        """Calculate log-likelihood of model output given observations."""
-        # Interpolate model output to observation sites
-        from scipy.interpolate import griddata
-        
-        # Create grid points from model output
-        grid_x = model_output[:, 0]
-        grid_y = model_output[:, 1]
-        grid_z = model_output[:, 2]
-        
-        # Interpolate to observation sites
-        interpolated = griddata(
-            (grid_x, grid_y),
-            grid_z,
-            (sites[:, 0], sites[:, 1]),
-            method='linear',
-            fill_value=0.0
-        )
-        
-        # Calculate log-likelihood
-        residuals = np.log(observations) - np.log(interpolated)
-        log_likelihood = -0.5 * np.sum(residuals**2) / (sigma**2)
-        
-        return log_likelihood
+        except Exception as e:
+            print(f"Unexpected error in run_tephra2: {e}")
+            raise
     
     def run_forward_model(self,
                          vent_location: Tuple[float, float, float],
-                         wind_data: np.ndarray,
+                         wind_data: pd.DataFrame,
                          params: Dict[str, float],
-                         output_path: Union[str, Path] = "output/forward_model.txt") -> Tuple[np.ndarray, float]:
-        """Run complete forward model with likelihood calculation."""
-        # Create config
-        config_path = self.create_config(vent_location, wind_data, output_path)
+                         config_path: Optional[Union[str, Path]] = None,
+                         sites_path: Optional[Union[str, Path]] = None,
+                         wind_path: Optional[Union[str, Path]] = None,
+                         output_path: Optional[Union[str, Path]] = None) -> np.ndarray:
+        """
+        Run forward model with the given parameters.
         
-        # Run Tephra2
-        model_output = self.run_tephra2(config_path, params)
+        Parameters
+        ----------
+        vent_location : Tuple[float, float, float]
+            (easting, northing, elevation) coordinates of vent
+        wind_data : pd.DataFrame
+            Wind data with HEIGHT, SPEED, DIRECTION columns
+        params : Dict[str, float]
+            Model parameters
+        config_path, sites_path, wind_path, output_path : Optional paths
+            If not provided, default paths will be used
+            
+        Returns
+        -------
+        np.ndarray
+            Model predictions
+        """
+        # Use default paths if not provided
+        if config_path is None:
+            config_path = self.config_dir / "tephra2.conf"
+        if sites_path is None:
+            sites_path = self.config_dir / "sites.csv"
+        if wind_path is None:
+            wind_path = self.config_dir / "wind.txt"
+        if output_path is None:
+            output_path = self.output_dir / "tephra2_output.txt"
+            
+        # Ensure paths are Path objects
+        config_path = Path(config_path)
+        sites_path = Path(sites_path)
+        wind_path = Path(wind_path)
+        output_path = Path(output_path)
         
-        return model_output
-
-def main():
-    """Main function to test Tephra2 interface."""
-    # Example usage
-    interface = Tephra2Interface()
+        # Check if we need to create/update the config file
+        self._write_config_file(config_path, vent_location, params)
+        
+        # Save wind data if it's a DataFrame
+        if isinstance(wind_data, pd.DataFrame) and not wind_path.exists():
+            self._write_wind_file(wind_path, wind_data)
+            
+        # Run tephra2
+        return self.run_tephra2(config_path, sites_path, wind_path, output_path)
     
-    # Example parameters
-    vent_location = (0.0, 0.0, 0.0)  # easting, northing, elevation
-    wind_data = np.array([
-        [1000, 10, 150],
-        [2000, 20, 140],
-        [3000, 25, 130],
-        [4000, 30, 110]
-    ])
-    params = {
-        "column_height": 7500,
-        "log_m": 27.5,
-        "alpha": 4.0,
-        "beta": 2.0
-    }
+    def _write_config_file(self, 
+                         config_path: Path, 
+                         vent_location: Tuple[float, float, float],
+                         params: Dict[str, float]) -> None:
+        """Write Tephra2 configuration file."""
+        with open(config_path, 'w') as f:
+            # Write vent location
+            f.write(f"VENT_EASTING {vent_location[0]:.6f}\n")
+            f.write(f"VENT_NORTHING {vent_location[1]:.6f}\n")
+            f.write(f"VENT_ELEVATION {vent_location[2]:.6f}\n")
+            
+            # Write other parameters
+            for name, value in params.items():
+                if isinstance(value, float) and value > 1e4:
+                    f.write(f"{name.upper()} {value:.6e}\n")
+                else:
+                    f.write(f"{name.upper()} {value:.6f}\n")
     
-    # Run forward model
-    model_output = interface.run_forward_model(
-        vent_location,
-        wind_data,
-        params
-    )
-    
-    print(f"Model output shape: {model_output.shape}")
-    print(f"First few points:\n{model_output[:5]}")
-
-if __name__ == "__main__":
-    main()
+    def _write_wind_file(self, wind_path: Path, wind_data: pd.DataFrame) -> None:
+        """Write wind data file from DataFrame."""
+        with open(wind_path, 'w') as f:
+            f.write("#HEIGHT SPEED DIRECTION\n")
+            for _, row in wind_data.iterrows():
+                f.write(f"{row['HEIGHT']:.1f} {row['SPEED']:.1f} {row['DIRECTION']:.1f}\n")

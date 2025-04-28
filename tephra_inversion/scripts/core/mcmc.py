@@ -3,8 +3,7 @@
 mcmc.py
 
 Implementation of the Metropolis-Hastings algorithm for Tephra2 parameter inversion.
-This module focuses solely on the core MCMC functionality, excluding diagnostic and 
-visualization functions.
+Simplified version that focuses on estimating only plume height and eruption mass.
 
 Functions:
 - changing_variable: Update Tephra2 config file with new parameters
@@ -46,11 +45,14 @@ warnings.filterwarnings("ignore")
 def changing_variable(input_params, config_path):
     """
     Updates the Tephra2 configuration file with new eruption source parameters.
+    Simplified to handle only plume height and eruption mass.
     
     Parameters
     ----------
     input_params : array-like of float
         Current values of the eruption source parameters (ESPs).
+        [0] = plume height
+        [1] = log eruption mass
     config_path : str
         Path to the Tephra2 configuration file to update.
 
@@ -59,34 +61,11 @@ def changing_variable(input_params, config_path):
     None
         (Modifies config file in place)
     """
-    # Map of parameter indices to config file parameter names
+    # Define param names
     param_names = [
-        'PLUME_HEIGHT',         # 0
-        'ERUPTION_MASS',        # 1 (input is log, we convert with exp)
-        'ALPHA',                # 2
-        'BETA',                 # 3
-        'MAX_GRAINSIZE',        # 4
-        'MIN_GRAINSIZE',        # 5
-        'MEDIAN_GRAINSIZE',     # 6
-        'STD_GRAINSIZE',        # 7
-        'VENT_EASTING',         # 8
-        'VENT_NORTHING',        # 9
-        'VENT_ELEVATION',       # 10
-        'EDDY_CONST',           # 11
-        'DIFFUSION_COEFFICIENT',# 12
-        'FALL_TIME_THRESHOLD',  # 13
-        'LITHIC_DENSITY',       # 14
-        'PUMICE_DENSITY',       # 15
-        'COL_STEPS',            # 16
-        'PART_STEPS',           # 17
-        'PLUME_MODEL'           # 18
+        'PLUME_HEIGHT',         # input_params[0]
+        'ERUPTION_MASS',        # input_params[1] (log mass, we convert with exp)
     ]
-    
-    # Special handling for certain parameters
-    param_formatters = {
-        'ERUPTION_MASS': lambda x: math.exp(x),   # Convert log mass to linear
-        'PLUME_MODEL': lambda x: int(x)           # Ensure plume model is an integer
-    }
     
     # Read the entire config file
     try:
@@ -96,15 +75,10 @@ def changing_variable(input_params, config_path):
         raise FileNotFoundError(f"Config file not found at: {config_path}")
     
     # Create a dictionary of parameters to update
-    updates = {}
-    for i, param_name in enumerate(param_names):
-        if i < len(input_params):
-            # Apply special formatting if needed
-            if param_name in param_formatters:
-                value = param_formatters[param_name](input_params[i])
-            else:
-                value = input_params[i]
-            updates[param_name] = value
+    updates = {
+        'PLUME_HEIGHT': input_params[0],
+        'ERUPTION_MASS': math.exp(input_params[1])
+    }
     
     # Update the config file lines
     updated_lines = []
@@ -140,11 +114,12 @@ def changing_variable(input_params, config_path):
 def draw_input_parameter(input_params, prior_type, draw_scale, prior_para):
     """
     Proposes new samples for eruption source parameters.
+    Simplified to handle only plume height and eruption mass.
 
     Parameters
     ----------
     input_params : array-like
-        Current parameter vector.
+        Current parameter vector [plume_height, log_mass].
     prior_type : array of str
         Distribution type for each parameter: "Gaussian", "Uniform", or "Fixed".
     draw_scale : array-like
@@ -185,13 +160,14 @@ def draw_input_parameter(input_params, prior_type, draw_scale, prior_para):
 def prior_function(prior_type, input_params, prior_para):
     """
     Computes the log-prior for parameters.
+    Simplified to handle only plume height and eruption mass.
 
     Parameters
     ----------
     prior_type : array of str
         "Gaussian", "Uniform", or "Fixed".
     input_params : np.array
-        Current parameter vector.
+        Current parameter vector [plume_height, log_mass].
     prior_para : 2D array-like
         Prior parameters.
         - If "Gaussian", then [mean, std].
@@ -341,11 +317,12 @@ def compute_posterior(input_params, config_path, sites_path, wind_path,
                       prior_type, prior_para, silent=True):
     """
     Computes the log-posterior = log-likelihood + log-prior.
+    Simplified to handle only plume height and eruption mass.
 
     Parameters
     ----------
     input_params : np.array
-        Proposed parameters.
+        Proposed parameters [plume_height, log_mass].
     config_path, sites_path, wind_path, output_path : str
         Paths to Tephra2 input/output files
     tephra2_path : str
@@ -393,11 +370,12 @@ def metropolis_hastings(input_params, prior_type, draw_scale, prior_para,
                        runs, likelihood_scale, observation, check_snapshot=100, silent=True):
     """
     Implements the Metropolis-Hastings algorithm for Tephra2 parameter inversion.
+    Simplified to handle only plume height and eruption mass.
 
     Parameters
     ----------
     input_params : array-like
-        Initial parameter vector.
+        Initial parameter vector [plume_height, log_mass].
     prior_type : array of str
         Distribution types for parameters.
     draw_scale : np.array
