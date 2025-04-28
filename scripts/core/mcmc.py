@@ -1,519 +1,199 @@
-#!/usr/bin/env python3
+# ─────────────────────────────────────────────────────────────
+# scripts/core/mcmc.py      · wind-free · ln(mass) · tqdm · 2025-04-28
+# ─────────────────────────────────────────────────────────────
 """
-mcmc.py
+Metropolis-Hastings inversion for Tephra2 when ONLY plume parameters vary.
 
-Implementation of the Metropolis-Hastings algorithm for Tephra2 parameter inversion.
-Simplified version that focuses on estimating only plume height and eruption mass.
+Parameter order we assume in the vector:
+  [0] plume_height  (m)
+  [1] log_mass      (natural log, kg)
+  [2] alpha, [3] beta, … any extra plume params.
 
-Functions:
-- changing_variable: Update Tephra2 config file with new parameters
-- draw_input_parameter: Draw a new sample for parameters
-- prior_function: Compute prior probability for parameters
-- likelihood_function: Compute likelihood of observations given predictions
-- run_tephra2: Interface with Tephra2 model
-- compute_posterior: Run forward model and compute posterior
-- metropolis_hastings: Main MCMC algorithm
-
-Dependencies:
-- numpy
-- scipy.stats
-- subprocess (for calling Tephra2)
-- tqdm (for progress bars)
+Wind is fixed (wind.txt already present).
 """
-
-import os
-import math
-import numpy as np
-import subprocess
-from scipy.stats import norm, uniform
-from tqdm import tqdm
-import warnings
-import logging
+from __future__ import annotations
+import logging, subprocess, os
 from pathlib import Path
-import stat
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+import numpy as np
+import pandas as pd
+from scipy.stats import norm, uniform
+
+from .mcmc_utils import changing_variable   # edits tephra2.conf
+
+# ─────────────────────────────────────────────────────────────
+# tqdm (progress-bar) – graceful fallback if library missing
+# ─────────────────────────────────────────────────────────────
+try:
+    from tqdm import trange
+except ImportError:                       # tqdm not installed
+    def trange(n, **kwargs):              # dummy iterator
+        return range(n)
+
 logger = logging.getLogger(__name__)
 
-# Suppress warnings for clarity
-warnings.filterwarnings("ignore")
+# ---------------------------------------------------------------------------
+#  Proposal helpers
+# ---------------------------------------------------------------------------
+def propose_gaussian(current, mask, scale):
+    """Random-walk Gaussian step where mask == True."""
+    proposal = current.copy()
+    # numeric draw_scale; empty strings / None → 0.0
+    scale_f = np.array([float(s) if str(s).strip() not in ("", "None") else 0.0
+                        for s in scale], dtype=float)
+    proposal[mask] = np.random.normal(loc=current[mask], scale=scale_f[mask])
+    return proposal
 
 
-def ensure_executable(path):
+def propose_uniform(current, mask, lower, upper):
+    proposal = current.copy()
+    proposal[mask] = np.random.uniform(lower, upper)
+    return proposal
+
+
+def draw_plume(current, prior_type, draw_scale, prior_para):
+    """One unified sampler for the full plume vector."""
+    proposal = current.copy()
+    # Gaussian params
+    mask_g = prior_type == "Gaussian"
+    if mask_g.any():
+        proposal = propose_gaussian(proposal, mask_g, draw_scale)
+    # Uniform params
+    mask_u = prior_type == "Uniform"
+    if mask_u.any():
+        lower, upper = prior_para[mask_u, 0], prior_para[mask_u, 1]
+        proposal = propose_uniform(proposal, mask_u, lower, upper)
+    return proposal
+
+# ---------------------------------------------------------------------------
+#  Priors & likelihood
+# ---------------------------------------------------------------------------
+def log_prior(plume, prior_type, prior_para) -> float:
+    """Return Σ log10(prior_pdf)."""
+    logp = np.zeros_like(plume, dtype=float)
+
+    mask_g = prior_type == "Gaussian"
+    if mask_g.any():
+        mu, sigma = prior_para[mask_g, 0], prior_para[mask_g, 1]
+        logp[mask_g] = np.log10(np.clip(norm.pdf(plume[mask_g], mu, sigma), 1e-300, None))
+
+    mask_u = prior_type == "Uniform"
+    if mask_u.any():
+        lo, hi = prior_para[mask_u, 0], prior_para[mask_u, 1]
+        logp[mask_u] = np.log10(np.clip(uniform.pdf(plume[mask_u], lo, hi-lo), 1e-300, None))
+
+    return float(logp.sum())
+
+
+def log_likelihood(pred, obs, sigma) -> float:
+    """Gaussian likelihood in log10 space."""
+    pred = np.clip(pred, 1e-3, None)
+    obs  = np.clip(obs,  1e-3, None)
+    log_ratio = np.log10(obs / pred)
+    return float(np.log10(np.clip(norm.pdf(log_ratio, 0, sigma), 1e-300, None)).sum())
+
+# ---------------------------------------------------------------------------
+#  Tephra2 runner (auto-fix sites delimiter)
+# ---------------------------------------------------------------------------
+def _ensure_sites_format(sites_csv: Path):
+    """Re-write sites file as space-delimited E N Z."""
+    df = pd.read_csv(sites_csv, sep=r"[,\s]+", engine="python", header=None)
+    if df.shape[1] != 3:
+        raise ValueError(f"{sites_csv} must have 3 columns (E,N,Z); got {df.shape[1]}")
+    df.to_csv(sites_csv, sep=" ", header=False, index=False, float_format="%.3f")
+
+
+def run_tephra2(plume_vec,
+                conf_path: Path,
+                sites_csv: Path,
+                silent=True) -> np.ndarray:
     """
-    Ensure the tephra2 executable has proper permissions.
-    
-    Args:
-        path (str): Path to the tephra2 executable
+    Edit tephra2.conf, ensure sites file OK, run Tephra2 executable located at
+    <repo_root>/Tephra2/tephra2_2020, return deposit column (kg m⁻²).
     """
-    path = Path(path)
-    if path.exists():
-        current_mode = os.stat(path).st_mode
-        os.chmod(path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        logger.info(f"Set executable permissions for {path}")
-    else:
-        logger.error(f"Warning: {path} does not exist")
-        raise FileNotFoundError(f"Tephra2 executable not found: {path}")
+    changing_variable(plume_vec, conf_path)
+    _ensure_sites_format(sites_csv)
 
+    exe = Path(__file__).resolve().parents[2] / "Tephra2" / "tephra2_2020"
+    out_file = conf_path.parent / "tephra2_output_mcmc.txt"
 
-def changing_variable(input_params, config_path):
+    cmd = [str(exe), str(conf_path), str(sites_csv), str(conf_path.parent / "wind.txt")]
+    res = subprocess.run(cmd, stdout=open(out_file, "w"),
+                         stderr=subprocess.PIPE, text=True)
+
+    if res.returncode != 0 or out_file.stat().st_size == 0:
+        raise RuntimeError(f"Tephra2 failed (exit {res.returncode}).\n--- STDERR ---\n{res.stderr}")
+
+    data = np.genfromtxt(out_file)
+    if data.ndim == 1:
+        data = data[np.newaxis, :]
+    return data[:, 3]     # mass-loading column
+
+# ---------------------------------------------------------------------------
+#  Main MH driver
+# ---------------------------------------------------------------------------
+def metropolis_hastings(
+        initial_plume, prior_type, prior_para, draw_scale,
+        runs, obs_load, likelihood_sigma,
+        conf_path, sites_csv,
+        burnin=0, silent=True, snapshot=100) -> dict:
     """
-    Update the tephra2 configuration file with new parameters.
-    
-    Args:
-        input_params (np.ndarray): Parameters for tephra2
-        config_path (str): Path to the configuration file
+    Returns dict with keys:
+        chain, posterior, prior, likelihood, accept_rate, burnin
     """
-    try:
-        with open(config_path, 'r') as fid:
-            s = fid.readlines()
-            
-        # Update parameters in config file
-        s[0] = f'PLUME_HEIGHT {float(input_params[0])}\n'
-        s[1] = f'ERUPTION_MASS {float(np.exp(input_params[1]))}\n'
-        s[2] = f'ALPHA {float(input_params[2])}\n'
-        s[3] = f'BETA {float(input_params[3])}\n'
-        s[4] = f'MAX_GRAINSIZE {float(input_params[4])}\n'
-        s[5] = f'MIN_GRAINSIZE {float(input_params[5])}\n'
-        s[6] = f'MEDIAN_GRAINSIZE {float(input_params[6])}\n'
-        s[7] = f'STD_GRAINSIZE {float(input_params[7])}\n'
-        s[8] = f'VENT_EASTING {float(input_params[8])}\n'
-        s[9] = f'VENT_NORTHING {float(input_params[9])}\n'
-        s[10] = f'VENT_ELEVATION {float(input_params[10])}\n'
-        s[11] = f'EDDY_CONST {float(input_params[11])}\n'
-        s[12] = f'DIFFUSION_COEFFICIENT {float(input_params[12])}\n'
-        s[13] = f'FALL_TIME_THRESHOLD {float(input_params[13])}\n'
-        s[14] = f'LITHIC_DENSITY {float(input_params[14])}\n'
-        s[15] = f'PUMICE_DENSITY {float(input_params[15])}\n'
-        s[16] = f'COL_STEPS {float(input_params[16])}\n'
-        s[17] = f'PART_STEPS {float(input_params[17])}\n'
-        s[18] = f'PLUME_MODEL {int(input_params[18])}\n'
-        
-        with open(config_path, 'w') as out:
-            for i in range(len(s)):
-                out.write(s[i])
-                
-        logger.debug(f"Updated config file at {config_path}")
-    
-    except Exception as e:
-        logger.error(f"Error updating config file: {str(e)}")
-        raise
+    npar   = len(initial_plume)
+    chain  = np.zeros((runs + 1, npar))
+    post   = np.zeros(runs + 1)
+    prior_arr = np.zeros(runs + 1)
+    like_arr  = np.zeros(runs + 1)
 
+    # ── initial state ─────────────────────────────────────────
+    chain[0] = initial_plume
+    pred0    = run_tephra2(chain[0], conf_path, sites_csv, silent)
+    like0    = log_likelihood(pred0, obs_load, likelihood_sigma)
+    prior0   = log_prior(chain[0], prior_type, prior_para)
+    post[0]  = like0 + prior0
+    like_arr[0], prior_arr[0] = like0, prior0
 
-def draw_input_parameter(input_params, prior_type, draw_scale, prior_para):
-    """
-    Proposes new samples for eruption source parameters.
-    Simplified to handle only plume height and eruption mass.
+    accept = 0
+    bar = trange(1, runs + 1, disable=silent, desc="MCMC")
 
-    Parameters
-    ----------
-    input_params : array-like
-        Current parameter vector [plume_height, log_mass].
-    prior_type : array of str
-        Distribution type for each parameter: "Gaussian", "Uniform", or "Fixed".
-    draw_scale : array-like
-        Standard deviations for the proposal distribution.
-    prior_para : 2D array-like
-        Prior parameters for each parameter.
-        - If "Gaussian", then [mean, std].
-        - If "Uniform", then [min, max].
+    # ── MH loop ───────────────────────────────────────────────
+    for i in bar:
+        proposal = draw_plume(chain[i-1], prior_type, draw_scale, prior_para)
 
-    Returns
-    -------
-    param_draw : np.array
-        Proposed new parameters.
-    """
-    param_draw = np.array(input_params).copy()  # Avoid in-place changes
-    
-    # For parameters flagged as "Gaussian"
-    mask_gaussian = np.array(prior_type) == "Gaussian"
-    if np.any(mask_gaussian):
-        param_draw[mask_gaussian] = np.random.normal(
-            loc=input_params[mask_gaussian], 
-            scale=draw_scale[mask_gaussian]
-        )
-    
-    # For parameters flagged as "Uniform"
-    mask_uniform = np.array(prior_type) == "Uniform"
-    if np.any(mask_uniform):
-        # Extract lower and upper bounds for each parameter
-        indices = np.where(mask_uniform)[0]
-        for i in indices:
-            lower, upper = prior_para[i][0], prior_para[i][1]
-            param_draw[i] = np.random.normal(
-                loc=input_params[i], 
-                scale=draw_scale[i]
-            )
-            # Ensure the drawn value is within the bounds
-            while param_draw[i] < lower or param_draw[i] > upper:
-                param_draw[i] = np.random.normal(
-                    loc=input_params[i], 
-                    scale=draw_scale[i]
-                )
-    
-    # "Fixed" parameters remain unchanged
-    return param_draw
+        pred_p  = run_tephra2(proposal, conf_path, sites_csv, silent)
+        like_p  = log_likelihood(pred_p, obs_load, likelihood_sigma)
+        prior_p = log_prior(proposal, prior_type, prior_para)
+        post_p  = like_p + prior_p
 
-
-def prior_function(prior_type, input_params, prior_para):
-    """
-    Computes the log-prior for parameters.
-    Simplified to handle only plume height and eruption mass.
-
-    Parameters
-    ----------
-    prior_type : array of str
-        "Gaussian", "Uniform", or "Fixed".
-    input_params : np.array
-        Current parameter vector [plume_height, log_mass].
-    prior_para : 2D array-like
-        Prior parameters.
-        - If "Gaussian", then [mean, std].
-        - If "Uniform", then [min, max].
-
-    Returns
-    -------
-    priors : np.array
-        Log10 of the prior pdf for each parameter.
-    """
-    priors = np.zeros_like(input_params, dtype=float)
-    
-    # Gaussian prior
-    mask_gaussian = np.array(prior_type) == "Gaussian"
-    if np.any(mask_gaussian):
-        indices = np.where(mask_gaussian)[0]
-        for i in indices:
-            mean, std = prior_para[i][0], prior_para[i][1]
-            pdf_value = norm.pdf(input_params[i], loc=mean, scale=std)
-            priors[i] = np.log10(np.clip(pdf_value, 1e-300, None))
-    
-    # Uniform prior
-    mask_uniform = np.array(prior_type) == "Uniform"
-    if np.any(mask_uniform):
-        indices = np.where(mask_uniform)[0]
-        for i in indices:
-            lower, upper = prior_para[i][0], prior_para[i][1]
-            # Check if parameter is within bounds
-            if lower <= input_params[i] <= upper:
-                pdf_value = 1.0 / (upper - lower)
-                priors[i] = np.log10(np.clip(pdf_value, 1e-300, None))
-            else:
-                # Zero probability (or very small in log space) if outside bounds
-                priors[i] = -300  # log10(1e-300)
-    
-    # "Fixed" parameters remain zero in log space (= probability of 1)
-    return priors
-
-
-def likelihood_function(prediction, observation, likelihood_scale):
-    """
-    Computes the log-likelihood comparing predicted vs. observed deposit loads.
-
-    Parameters
-    ----------
-    prediction : np.array
-        Model-predicted deposit load (kg/m2) at observation sites.
-    observation : np.array
-        Observed deposit load (kg/m2) from field measurements.
-    likelihood_scale : float
-        Standard deviation (σ) for the Gaussian likelihood in log10-space.
-
-    Returns
-    -------
-    likelihood_array : np.array
-        Log10 likelihood contributions from each observation.
-    """
-    # Avoid division by zero or log(0)
-    prediction = np.clip(prediction, 0.001, None)
-    observation = np.clip(observation, 0.001, None)
-
-    # Compute log ratio of observation to prediction
-    log_ratio = np.log10(observation / prediction)
-    
-    # Evaluate normal PDF with mean=0, std=likelihood_scale
-    pdf_values = norm.pdf(log_ratio, loc=0, scale=likelihood_scale)
-    
-    # Convert to log10 space
-    likelihood_array = np.log10(np.maximum(pdf_values, 1e-300))
-    return likelihood_array
-
-
-def run_tephra2(config_path, sites_path, wind_path, output_path, tephra2_path, silent=True):
-    """
-    Executes Tephra2 with specified input files.
-
-    Parameters
-    ----------
-    config_path : str or Path
-        Path to Tephra2 configuration file
-    sites_path : str or Path
-        Path to sites file
-    wind_path : str or Path
-        Path to wind profile file
-    output_path : str or Path
-        Path where Tephra2 output will be saved
-    tephra2_path : str or Path
-        Path to Tephra2 executable
-    silent : bool
-        If True, suppresses Tephra2 console output
-
-    Returns
-    -------
-    np.array
-        The tephra deposit predictions from the output file
-    """
-    # Ensure paths are strings
-    config_path = str(config_path)
-    sites_path = str(sites_path)
-    wind_path = str(wind_path)
-    output_path = str(output_path)
-    tephra2_path = str(tephra2_path)
-    
-    # Add debug output
-    logger.debug(f"Running tephra2 with:")
-    logger.debug(f"  tephra2_path: {tephra2_path}")
-    logger.debug(f"  config_path: {config_path}")
-    logger.debug(f"  sites_path: {sites_path}")
-    logger.debug(f"  wind_path: {wind_path}")
-    logger.debug(f"  output_path: {output_path}")
-    
-    # Check if files exist
-    for path, desc in [
-        (tephra2_path, "Tephra2 executable"),
-        (config_path, "Config file"),
-        (sites_path, "Sites file"),
-        (wind_path, "Wind file"),
-    ]:
-        if not os.path.exists(path):
-            logger.error(f"{desc} not found: {path}")
-            raise FileNotFoundError(f"{desc} not found: {path}")
-    
-    # Ensure executable permission
-    ensure_executable(tephra2_path)
-    
-    try:
-        # Use shell=True approach with command string
-        cmd_str = f"{tephra2_path} {config_path} {sites_path} {wind_path}"
-        
-        if silent:
-            # Redirect output to file
-            result = subprocess.run(f"{cmd_str} > {output_path}", 
-                                    shell=True, 
-                                    stderr=subprocess.PIPE,
-                                    stdout=subprocess.PIPE,
-                                    check=False)
+        if np.random.rand() < np.exp((post_p - post[i-1]) * np.log(10)):     # log10→ln
+            chain[i] = proposal
+            post[i]  = post_p
+            prior_arr[i], like_arr[i] = prior_p, like_p
+            accept += 1
         else:
-            # Open file for writing output
-            with open(output_path, 'w') as f:
-                result = subprocess.run(cmd_str, 
-                                        shell=True,
-                                        stdout=f,
-                                        stderr=subprocess.PIPE,
-                                        check=False)
-        
-        # Check if the command was successful
-        if result.returncode != 0:
-            error_msg = result.stderr.decode() if result.stderr else "No error message available"
-            logger.error(f"Tephra2 execution failed with error code {result.returncode}: {error_msg}")
-            raise subprocess.CalledProcessError(result.returncode, cmd_str, stderr=error_msg)
-        
-        # Read and return the output
-        try:
-            prediction = np.genfromtxt(output_path, delimiter=' ')
-            prediction = np.nan_to_num(prediction, nan=0.001)
-            return prediction[:, 3]  # Extract the relevant column (mass)
-        except Exception as e:
-            logger.error(f"Error reading tephra2 output: {str(e)}")
-            raise
-        
-    except Exception as e:
-        logger.error(f"Error running tephra2: {str(e)}")
-        raise
+            chain[i] = chain[i-1]
+            post[i]  = post[i-1]
+            prior_arr[i], like_arr[i] = prior_arr[i-1], like_arr[i-1]
 
+        if not silent and i % snapshot == 0:
+            bar.set_postfix(acc=accept/i, plume=proposal[0], lnM=proposal[1])
 
-def compute_posterior(input_params, config_path, sites_path, wind_path, output_path, 
-                     tephra2_path, observation, likelihood_scale, prior_type, prior_para, silent):
-    """
-    Compute the posterior value for the given parameters.
-    
-    Args:
-        input_params (np.ndarray): Parameters to evaluate
-        config_path (str): Path to tephra2 config file
-        sites_path (str): Path to tephra2 sites file
-        wind_path (str): Path to tephra2 wind file
-        output_path (str): Path for tephra2 output
-        tephra2_path (str): Path to tephra2 executable
-        observation (np.ndarray): Observed deposit thicknesses
-        likelihood_scale (float): Scale parameter for likelihood function
-        prior_type (list): Prior distribution types for each parameter
-        prior_para (list): Prior distribution parameters for each parameter
-        silent (bool): Whether to run tephra2 silently
-    
-    Returns:
-        tuple: (posterior, likelihood, prior) values
-    """
-    # 1. Update config file with input parameters
-    changing_variable(input_params, config_path)
-    
-    # 2. Run Tephra2 forward model
-    try:
-        prediction = run_tephra2(config_path, sites_path, wind_path, output_path, tephra2_path, silent)
-        
-        # 3. Calculate likelihood
-        likelihood_temp = likelihood_function(prediction, observation, likelihood_scale)
-        
-        # 4. Calculate prior
-        prior_temp = prior_function(prior_type, input_params, prior_para)
-        
-        # 5. Calculate posterior
-        posterior_temp = np.sum(likelihood_temp) + np.sum(prior_temp)
-        
-        return posterior_temp, likelihood_temp, prior_temp
-    
-    except Exception as e:
-        logger.error(f"Error in compute_posterior: {str(e)}")
-        raise
+    return {
+        "chain": chain,
+        "posterior": post,
+        "prior": prior_arr,
+        "likelihood": like_arr,
+        "accept_rate": accept / runs,
+        "burnin": burnin
+    }
 
+# ---------------------------------------------------------------------------
+#  Deprecated wrappers for legacy imports
+# ---------------------------------------------------------------------------
+def prior_function(prior_type, plume_vec, prior_para):
+    return log_prior(plume_vec, prior_type, prior_para)
 
-def metropolis_hastings(input_params, prior_type, draw_scale, prior_para,
-                       config_path, sites_path, wind_path, output_path, tephra2_path,
-                       runs, likelihood_scale, observation, check_snapshot=100, silent=True):
-    """
-    Implements the Metropolis-Hastings algorithm for Tephra2 parameter inversion.
-    Simplified to handle only plume height and eruption mass.
-
-    Parameters
-    ----------
-    input_params : array-like
-        Initial parameter vector [plume_height, log_mass].
-    prior_type : array of str
-        Distribution types for parameters.
-    draw_scale : np.array
-        Step sizes for parameter proposals.
-    prior_para : array-like
-        Prior distribution parameters.
-    config_path, sites_path, wind_path, output_path : str or Path
-        Paths to Tephra2 input/output files
-    tephra2_path : str or Path
-        Path to Tephra2 executable
-    runs : int
-        Number of MCMC iterations.
-    likelihood_scale : float
-        Standard deviation for the likelihood function.
-    observation : np.array
-        Observed deposit loads at each site.
-    check_snapshot : int
-        Frequency to print status updates.
-    silent : bool
-        If True, suppresses Tephra2 console output.
-
-    Returns
-    -------
-    chain : (runs+1) x n_params np.array
-        Sample chain of all accepted states.
-    post_chain : (runs+1) np.array
-        Posterior values for each sample in the chain.
-    acceptance_count : int
-        How many proposed states were accepted.
-    prior_array : (runs+1) np.array
-        Log-prior sums for each iteration.
-    likeli_array : (runs+1) np.array
-        Log-likelihood sums for each iteration.
-    """
-    try:
-        # 1. Initialize storage
-        n_params = len(input_params)
-        chain = np.zeros((runs + 1, n_params))
-        post_chain = np.zeros(runs + 1)
-        prior_array = np.zeros(runs + 1)
-        likeli_array = np.zeros(runs + 1)
-        
-        # 2. Set initial state
-        chain[0] = input_params
-        
-        # Print current directory and file existence status for debugging
-        logger.info(f"Current working directory: {os.getcwd()}")
-        logger.info("Checking if key files exist:")
-        for path in [tephra2_path, config_path, sites_path, wind_path]:
-            logger.info(f"  {path}: {'exists' if os.path.exists(path) else 'does not exist'}")
-        
-        # Ensure tephra2 is executable
-        ensure_executable(tephra2_path)
-        
-        # 3. Compute initial posterior
-        posterior_temp, likelihood_temp, prior_temp = compute_posterior(
-            input_params, config_path, sites_path, wind_path, output_path,
-            tephra2_path, observation, likelihood_scale, prior_type, prior_para, silent
-        )
-        
-        post_chain[0] = posterior_temp
-        prior_array[0] = np.sum(prior_temp)
-        likeli_array[0] = np.sum(likelihood_temp)
-        
-        acceptance_count = 0
-        
-        # 4. Main MCMC loop
-        for i in tqdm(range(1, runs + 1), desc="MCMC Progress"):
-            try:
-                # 4.1. Propose new sample
-                params_temp = draw_input_parameter(
-                    chain[i-1], prior_type, draw_scale, prior_para
-                )
-                
-                # 4.2. Compute new posterior
-                posterior_new, likelihood_new, prior_new = compute_posterior(
-                    params_temp, config_path, sites_path, wind_path, output_path,
-                    tephra2_path, observation, likelihood_scale, prior_type, prior_para, silent
-                )
-                
-                # 4.3. Accept/reject step
-                if not np.isfinite(posterior_new):
-                    # Automatically reject invalid proposals
-                    acceptance_prob = 0
-                    logger.warning(f"Invalid proposal at iteration {i}: non-finite posterior")
-                else:
-                    # Standard Metropolis acceptance probability
-                    acceptance_prob = min(1.0, 10**(posterior_new - posterior_temp))
-                
-                if np.random.rand() < acceptance_prob:
-                    # Accept the proposal
-                    chain[i] = params_temp
-                    post_chain[i] = posterior_new
-                    posterior_temp = posterior_new
-                    prior_array[i] = np.sum(prior_new)
-                    likeli_array[i] = np.sum(likelihood_new)
-                    acceptance_count += 1
-                else:
-                    # Reject the proposal, keep previous state
-                    chain[i] = chain[i-1]
-                    post_chain[i] = post_chain[i-1]
-                    prior_array[i] = prior_array[i-1]
-                    likeli_array[i] = likeli_array[i-1]
-                
-                # 4.4. Periodic reporting
-                if i % check_snapshot == 0:
-                    logger.info(f"Iteration {i}/{runs}: Acceptance Rate = {acceptance_count / i:.4f}")
-                    
-            except Exception as e:
-                logger.error(f"Error in MCMC iteration {i}: {e}")
-                # Keep previous state on error
-                chain[i] = chain[i-1]
-                post_chain[i] = post_chain[i-1]
-                prior_array[i] = prior_array[i-1]
-                likeli_array[i] = likeli_array[i-1]
-        
-        logger.info(f"MCMC completed with final acceptance rate: {acceptance_count / runs:.4f}")
-        return chain, post_chain, acceptance_count, prior_array, likeli_array
-        
-    except Exception as e:
-        logger.error(f"Fatal error in MCMC: {e}")
-        raise
-
-
-if __name__ == "__main__":
-    print("This module provides MCMC functionality for tephra inversion.")
-    print("Import this module in your scripts or notebooks to use its functions.")
+def likelihood_function(prediction, observation, sigma):
+    return log_likelihood(prediction, observation, sigma)

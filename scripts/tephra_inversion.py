@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import logging
 import stat
 from datetime import datetime
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -159,7 +160,7 @@ class TephraInversion:
         n_params = len(param_config)
         initial_values = np.zeros(n_params)
         prior_type = [""] * n_params
-        draw_scale = np.zeros(n_params)
+        draw_scale = [""] * n_params
         prior_parameters = [None] * n_params
         
         # Fill parameter arrays from config
@@ -234,31 +235,42 @@ class TephraInversion:
         
         return config_path
     
-    def create_sites_file(self):
+    def create_sites_file(self) -> str:
         """
-        Create a sites file for tephra2 from observations.
-        
-        Returns:
-            str: Path to the created sites file
+        Ensure that data/input/sites.csv is space-delimited
+        (EASTING  NORTHING  ELEVATION) for Tephra2.
+        Returns the path to the sanitised file.
         """
-        if self.observations is None:
-            logging.error("No observations loaded")
-            raise ValueError("No observations loaded")
-        
-        # Define path
-        sites_path = "data/input/sites.csv"
-        
-        # Extract coordinates from observations
-        sites = self.observations[["easting", "northing", "elevation"]]
-        
-        # Write sites file
-        with open(sites_path, 'w') as f:
-            for i, row in sites.iterrows():
-                f.write(f"{row['easting']} {row['northing']} {row['elevation']}\n")
-        
-        logging.info(f"Sites file created at: {sites_path} with {len(sites)} sites")
-        
-        return sites_path
+        sites_path = Path("data/input/sites.csv")
+
+        # If file already exists, load + sanitize; otherwise build it from observations
+        if sites_path.exists():
+            df = pd.read_csv(
+                sites_path,
+                sep=r"[,\s]+",        # accept comma, tab or whitespace
+                engine="python",
+                header=None
+            )
+            if df.shape[1] != 3:
+                raise ValueError(
+                    f"sites.csv should have 3 columns (E,N,Elev) but has {df.shape[1]}"
+                )
+            df.columns = ["easting", "northing", "elevation"]
+        else:
+            if self.observations is None:
+                raise ValueError("No observations loaded to create sites file.")
+            df = self.observations[["easting", "northing", "elevation"]].copy()
+
+        # Overwrite with whitespace-delimited format Tephra2 expects
+        df.to_csv(
+            sites_path,
+            sep=" ",
+            header=False,
+            index=False,
+            float_format="%.3f"
+        )
+        logging.info(f"Sites file sanitised at: {sites_path} ({len(df)} rows)")
+        return str(sites_path)
     
     def create_wind_file(self):
         """
@@ -304,65 +316,78 @@ class TephraInversion:
     
     def run_inversion(self):
         """
-        Run the inversion using MCMC.
-        
-        Returns:
-            dict: Results of the inversion containing the parameter chain and statistics
+        Run the Metropolis-Hastings inversion and return a results dict.
         """
-        # Prepare input files
-        config_path, sites_path, wind_path, output_path = self._prepare_input_files()
-        
-        # Ensure tephra2 executable has proper permissions
-        tephra2_path = self.config["tephra2"]["executable"]
-        self._ensure_executable(tephra2_path)
-        
-        # Prepare MCMC parameters
-        mcmc_params = self._prepare_mcmc_parameters()
-        
-        # Run MCMC
-        print("\nRunning MCMC parameter estimation...")
-        try:
-            chain, post_chain, acceptance_count, prior_array, likeli_array = metropolis_hastings(
-                mcmc_params["initial_values"], 
-                mcmc_params["prior_type"], 
-                mcmc_params["draw_scale"], 
-                mcmc_params["prior_parameters"],
-                config_path, 
-                sites_path, 
-                wind_path, 
-                output_path,
-                tephra2_path,
-                self.config["mcmc"]["n_iterations"],
-                0.1,  # Likelihood scale
-                self.observations["thickness"].values,
-                check_snapshot=100,
-                silent=True
-            )
-            
-            # Process results
-            best_idx = np.argmax(post_chain)
-            best_params = chain[best_idx]
-            
-            # Store results
-            results = {
-                "chain": chain,
-                "post_chain": post_chain,
-                "acceptance_rate": acceptance_count / self.config["mcmc"]["n_iterations"],
-                "best_params": best_params,
-                "best_posterior": post_chain[best_idx],
-                "prior_array": prior_array,
-                "likelihood_array": likeli_array
-            }
-            
-            # Log results summary
-            logging.info(f"MCMC completed with {self.config['mcmc']['n_iterations']} iterations")
-            logging.info(f"Acceptance rate: {results['acceptance_rate']:.2f}")
-            
-            return results
-        
-        except Exception as e:
-            logging.error(f"Fatal error in MCMC: {str(e)}")
-            raise
+    
+        # 0. Input files + exec permissions
+        conf_path, sites_path, wind_path, _ = self._prepare_input_files()
+        self._ensure_executable(self.config["tephra2"]["executable"])
+    
+        # 1. Assemble MCMC vectors
+        pcfg = self.config["parameters"]
+        names = list(pcfg.keys())
+    
+        init_vals = np.array([pcfg[k]["initial_value"] for k in names])
+        prior_typ = np.array([pcfg[k]["prior_type"]     for k in names])
+        draw_scl  = np.array([
+            float(pcfg[k].get("draw_scale", 0) or 0.0)  # robust numeric
+            for k in names
+        ])
+        prior_par = np.array([
+            [pcfg[k].get("prior_mean",  pcfg[k].get("prior_min", 0)),
+             pcfg[k].get("prior_std",   pcfg[k].get("prior_max", 0))]
+            if pcfg[k]["prior_type"] == "Gaussian" else
+            [pcfg[k].get("prior_min",   0),
+             pcfg[k].get("prior_max",   0)]
+            for k in names
+        ])
+    
+        # 2. Runtime options
+        mcmc_cfg   = self.config.get("mcmc", {})
+        n_iter     = mcmc_cfg.get("n_iterations", 10000)
+        n_burn     = mcmc_cfg.get("n_burnin",     2000)
+        like_sig   = mcmc_cfg.get("likelihood_sigma", 0.25)
+        silent     = mcmc_cfg.get("silent", True)
+        snapshot   = mcmc_cfg.get("snapshot", 100)
+    
+        # 3. Run MH (will raise on fatal Tephra2 errors)
+        mh = metropolis_hastings(
+            initial_plume   = init_vals,
+            prior_type      = prior_typ,
+            prior_para      = prior_par,
+            draw_scale      = draw_scl,
+            runs            = n_iter,
+            obs_load        = self.observations["observation"].values,
+            likelihood_sigma= like_sig,
+            conf_path       = Path(conf_path),
+            sites_csv       = Path(sites_path),
+            burnin          = n_burn,
+            silent          = silent,
+            snapshot        = snapshot,
+        )
+    
+        # 4. Post-process
+        chain_np = mh["chain"]                       # (n_iter+1, n_param)
+        chain_df = pd.DataFrame(chain_np, columns=names)
+    
+        best_idx = np.argmax(mh["posterior"])
+        best_row = chain_df.iloc[best_idx]
+    
+        results = {
+            "chain":            chain_df,            # DataFrame → notebook-friendly
+            "posterior":        mh["posterior"],
+            "prior_array":      mh["prior"],
+            "likelihood_array": mh["likelihood"],
+            "acceptance_rate":  mh["accept_rate"],
+            "burnin":           n_burn,
+            "best_params":      best_row,
+            "best_posterior":   mh["posterior"][best_idx],
+        }
+    
+        logging.info("MCMC finished: %d iters, accept=%.2f",
+                     n_iter, results["acceptance_rate"])
+    
+        return results
 
     def save_results(self, results, output_dir="results"):
         """
