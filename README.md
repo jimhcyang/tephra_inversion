@@ -13,20 +13,48 @@ A Python framework for tephra inversion using Tephra2. This framework provides a
 
 ## Installation
 
-1. Create a virtual environment:
+### 1. Clone the repository
+
 ```bash
+cd your/working/directory
+git clone https://github.com/jimhcyang/tephra_inversion.git
+cd tephra_inversion/tephra_inversion
+```
+
+### 2. Set up Tephra2
+
+Clone and compile the Tephra2 executable:
+
+```bash
+# Clone Tephra2 repository
+git clone https://github.com/geoscience-community-codes/Tephra2.git
+
+# Install required dependencies (if using conda)
+conda install -y -c conda-forge boehm-gc libatomic_ops
+
+# Set environment variables for compilation
+export C_INCLUDE_PATH=$CONDA_PREFIX/include
+export LIBRARY_PATH=$CONDA_PREFIX/lib
+
+# Compile Tephra2
+cd Tephra2
+make clean
+make
+
+# Return to main directory
+cd ..
+```
+
+### 3. Set up Python environment
+
+```bash
+# Create and activate a virtual environment
 python -m venv tephra_env
 source tephra_env/bin/activate  # On Windows: tephra_env\Scripts\activate
-```
 
-2. Install dependencies:
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
-
-3. Install Tephra2 executable (Windows users may need WSL):
-   - Download from [GSCommunity Codes](https://gscommunitycodes.usf.edu/geoscicommunitycodes/public/) or
-   - Compile from source files in the `tephra2` directory
 
 ## Directory Structure
 
@@ -56,8 +84,8 @@ tephra_inversion/
 │       ├── diagnostic_plots.py  # MCMC diagnostic plots
 │       ├── observation_plots.py # Observation plots
 │       └── wind_plots.py        # Wind data plots
-├── tephra2/
-│   └── tephra2_2020             # Tephra2 executable
+├── Tephra2/
+│   └── tephra2_2020             # Tephra2 executable (compiled)
 ├── demo.ipynb                   # Demo notebook
 └── requirements.txt             # Dependencies
 ```
@@ -141,6 +169,7 @@ jupyter notebook demo.ipynb
 - Python 3.8+
 - NumPy, Pandas, Matplotlib, SciPy
 - utm (for coordinate conversion)
-- Tephra2 executable (in tephra2 directory)
+- Tephra2 executable (in Tephra2 directory)
+- Additional compilation dependencies for Tephra2: boehm-gc, libatomic_ops
 
 See `requirements.txt` for full list of dependencies.
