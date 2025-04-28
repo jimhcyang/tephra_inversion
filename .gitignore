@@ -1,10 +1,5 @@
-# — Ignore everything by default —
-/*
-
-# — But keep the .gitignore file and the tephra_inversion/ directory —
+# — Keep the .gitignore file and the tephra_inversion/ directory —
 !/.gitignore
-!/tephra_inversion/
-!/tephra_inversion/**
 
 # — Standard Python and project ignores — 
 __pycache__/
