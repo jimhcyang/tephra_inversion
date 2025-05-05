@@ -19,15 +19,15 @@ logging.basicConfig(
 )
 
 # Import core modules
-from scripts.core.mcmc import metropolis_hastings, prior_function, likelihood_function
-from scripts.core.tephra2_interface import run_tephra2, changing_variable
+from scripts.core.mcmc import metropolis_hastings
+from scripts.data_handling.esp_config import load_config
 
 class TephraInversion:
     """
     Class for performing inversion of tephra2 model using MCMC.
     """
     
-    def __init__(self, config, observations=None):
+    def __init__(self, config={}, observations=None):
         """
         Initialize the TephraInversion class.
         
@@ -36,49 +36,98 @@ class TephraInversion:
             observations (pd.DataFrame, optional): Observed deposit data
         """
         self.config = config
-        self.observations = observations
         
-        # Validate configuration
-        self._validate_configuration()
+        # Load default configuration
+        self.default_config = load_config()
         
-        # Load observations if not provided
-        if observations is None and "observation_file" in self.config:
-            self.load_observations(self.config["observation_file"])
-            
-        logging.info("TephraInversion initialized")
-    
-    def _validate_configuration(self):
-        """
-        Validate the configuration settings and correct paths if needed.
-        """
-        # Check tephra2 executable path
-        tephra2_path = self.config["tephra2"]["executable"]
-        if not os.path.exists(tephra2_path):
-            # Try alternative paths
-            alternatives = [
-                "./Tephra2/tephra2_2020",
-                "../Tephra2/tephra2_2020",
-                "~/tephra2/tephra2_2020"
-            ]
-            
-            for alt_path in alternatives:
-                expanded_path = os.path.expanduser(alt_path)
-                if os.path.exists(expanded_path):
-                    self.config["tephra2"]["executable"] = expanded_path
-                    logging.info(f"Updated tephra2 executable path to {expanded_path}")
-                    break
-            else:
-                logging.warning(f"Could not find tephra2 executable at {tephra2_path} or alternative locations")
+        # If config doesn't contain mcmc settings, use default
+        if "mcmc" not in self.config:
+            self.config["mcmc"] = self.default_config["mcmc"]
         
-        # Ensure input/output directories exist
+        # Ensure directories exist
         os.makedirs("data/input", exist_ok=True)
         os.makedirs("data/output", exist_ok=True)
         
-        # Check required parameters
-        required_sections = ["tephra2", "mcmc", "parameters"]
-        for section in required_sections:
-            if section not in self.config:
-                raise ValueError(f"Missing required configuration section: {section}")
+        # If observations not provided, load them from files
+        if observations is None:
+            try:
+                # Load observation mass from CSV
+                obs_vec = np.loadtxt("data/input/observations.csv")  # 1-D array
+                
+                # Check the file format first
+                with open("data/input/sites.csv", "r") as f:
+                    first_line = f.readline().strip()
+                
+                # Determine separator based on first line
+                if "," in first_line:
+                    sites_ar = pd.read_csv("data/input/sites.csv", sep=",", header=None).values
+                    logging.info("Using comma separator for sites.csv")
+                else:
+                    sites_ar = pd.read_csv("data/input/sites.csv", sep=r"\s+", header=None).values
+                    logging.info("Using whitespace separator for sites.csv")
+                
+                # Create observations dataframe
+                self.observations = pd.DataFrame({
+                    "easting":      sites_ar[:, 0],
+                    "northing":     sites_ar[:, 1],
+                    "elevation":    sites_ar[:, 2],
+                    "observation":  obs_vec,
+                })
+                
+                logging.info(f"Loaded {len(self.observations)} observations automatically")
+            except Exception as e:
+                logging.error(f"Error loading observations: {str(e)}")
+                raise ValueError("Observations must be provided or available in data/input/ directory")
+        else:
+            self.observations = observations
+        
+        # Load ESP input parameters
+        self._load_esp_parameters()
+        
+        logging.info("TephraInversion initialized")
+    
+    def _load_esp_parameters(self):
+        """
+        Load parameters from esp_input.csv file
+        """
+        try:
+            # Check if esp_input.csv exists
+            esp_input_path = Path("data/input/esp_input.csv")
+            if not esp_input_path.exists():
+                logging.warning("esp_input.csv not found, will use provided config only")
+                return
+                
+            # Read parameters from file
+            esp_params = pd.read_csv(esp_input_path)
+            logging.info(f"Loaded {len(esp_params)} parameters from esp_input.csv")
+            
+            # If we have a parameters section in config already, update it with ESP parameters
+            if "parameters" not in self.config:
+                self.config["parameters"] = {}
+                
+            # Get variable parameters (non-Fixed)
+            for _, row in esp_params[esp_params['prior_type'] != 'Fixed'].iterrows():
+                param_name = row['variable_name']
+                self.config["parameters"][param_name] = {
+                    "initial_value": row['initial_val'],
+                    "prior_type": row['prior_type'],
+                    "prior_mean" if row['prior_type'] == "Gaussian" else "prior_min": row['prior_para_a'],
+                    "prior_std" if row['prior_type'] == "Gaussian" else "prior_max": row['prior_para_b'],
+                    "draw_scale": row['draw_scale']
+                }
+                
+            # Get fixed parameters
+            for _, row in esp_params[esp_params['prior_type'] == 'Fixed'].iterrows():
+                param_name = row['variable_name']
+                self.config["parameters"][param_name] = {
+                    "initial_value": row['initial_val'],
+                    "prior_type": "Fixed",
+                    "draw_scale": ""
+                }
+                
+        except Exception as e:
+            logging.error(f"Error loading ESP parameters: {str(e)}")
+            raise
     
     def _ensure_executable(self, path):
         """
@@ -95,28 +144,6 @@ class TephraInversion:
             logging.error(f"Tephra2 executable not found at {path}")
             raise FileNotFoundError(f"Tephra2 executable not found at {path}")
     
-    def load_observations(self, file_path):
-        """
-        Load observations from file.
-        
-        Args:
-            file_path (str): Path to the observation file
-        """
-        try:
-            observations = pd.read_csv(file_path)
-            required_columns = ["easting", "northing", "elevation"]
-            
-            # Check required columns
-            for col in required_columns:
-                if col not in observations.columns:
-                    raise ValueError(f"Observation file missing required column: {col}")
-            
-            self.observations = observations
-            logging.info(f"Loaded {len(observations)} observations from {file_path}")
-        except Exception as e:
-            logging.error(f"Failed to load observations: {str(e)}")
-            raise
-    
     def _prepare_input_files(self):
         """
         Prepare the input files for tephra2.
@@ -124,9 +151,6 @@ class TephraInversion:
         Returns:
             tuple: Paths to the input files (config_path, sites_path, wind_path, output_path)
         """
-        # Create output directory if it doesn't exist
-        os.makedirs("data/output", exist_ok=True)
-        
         # Define paths
         config_path = "data/input/tephra2.conf"
         sites_path = "data/input/sites.csv"
@@ -147,223 +171,56 @@ class TephraInversion:
         
         return config_path, sites_path, wind_path, output_path
     
-    def _prepare_mcmc_parameters(self):
-        """
-        Prepare parameters for the MCMC algorithm.
-        
-        Returns:
-            dict: Dictionary of MCMC parameters
-        """
-        param_config = self.config["parameters"]
-        
-        # Initialize parameter arrays
-        n_params = len(param_config)
-        initial_values = np.zeros(n_params)
-        prior_type = [""] * n_params
-        draw_scale = [""] * n_params
-        prior_parameters = [None] * n_params
-        
-        # Fill parameter arrays from config
-        for i, (param_name, param_info) in enumerate(param_config.items()):
-            initial_values[i] = param_info["initial_value"]
-            prior_type[i] = param_info["prior_type"]
-            draw_scale[i] = param_info["draw_scale"]
-            
-            if prior_type[i] == "Gaussian":
-                prior_parameters[i] = [param_info["prior_mean"], param_info["prior_std"]]
-            elif prior_type[i] == "Uniform":
-                prior_parameters[i] = [param_info["prior_min"], param_info["prior_max"]]
-            elif prior_type[i] == "Fixed":
-                prior_parameters[i] = [param_info["initial_value"], 0]
-            else:
-                raise ValueError(f"Unknown prior type: {prior_type[i]}")
-        
-        # Log parameter info
-        logging.info(f"MCMC initialized with {n_params} parameters")
-        for i, param_name in enumerate(param_config.keys()):
-            logging.info(f"  {param_name}: initial={initial_values[i]}, prior={prior_type[i]}")
-        
-        return {
-            "initial_values": initial_values,
-            "prior_type": prior_type,
-            "draw_scale": draw_scale,
-            "prior_parameters": prior_parameters
-        }
-    
-    def create_tephra2_config(self):
-        """
-        Create a tephra2 configuration file from template.
-        
-        Returns:
-            str: Path to the created config file
-        """
-        # Define paths
-        config_path = "data/input/tephra2.conf"
-        template_path = self.config.get("tephra2", {}).get("template", "templates/tephra2.conf.template")
-        
-        # Ensure template exists
-        if not os.path.exists(template_path):
-            logging.error(f"Template file not found: {template_path}")
-            raise FileNotFoundError(f"Template file not found: {template_path}")
-        
-        # Read template
-        with open(template_path, 'r') as f:
-            template = f.read()
-        
-        # Replace placeholders with values from config
-        placeholders = {
-            "PLUME_HEIGHT": self.config["parameters"]["plume_height"]["initial_value"],
-            "ERUPTION_MASS": np.exp(self.config["parameters"]["log_mass"]["initial_value"]),
-            "VENT_EASTING": self.config["parameters"]["vent_easting"]["initial_value"],
-            "VENT_NORTHING": self.config["parameters"]["vent_northing"]["initial_value"],
-            "VENT_ELEVATION": self.config["parameters"]["vent_elevation"]["initial_value"],
-            "MAX_GRAINSIZE": self.config["parameters"]["max_grainsize"]["initial_value"],
-            "MIN_GRAINSIZE": self.config["parameters"]["min_grainsize"]["initial_value"],
-            "MEDIAN_GRAINSIZE": self.config["parameters"]["median_grainsize"]["initial_value"],
-            "STD_GRAINSIZE": self.config["parameters"]["std_grainsize"]["initial_value"],
-            "DIFFUSION_COEFFICIENT": self.config["parameters"]["diffusion_coefficient"]["initial_value"]
-        }
-        
-        for key, value in placeholders.items():
-            template = template.replace(f"${key}$", str(value))
-        
-        # Write config file
-        with open(config_path, 'w') as f:
-            f.write(template)
-        
-        logging.info(f"Parameter configuration file created at: {config_path}")
-        
-        return config_path
-    
-    def create_sites_file(self) -> str:
-        """
-        Ensure that data/input/sites.csv is space-delimited
-        (EASTING  NORTHING  ELEVATION) for Tephra2.
-        Returns the path to the sanitised file.
-        """
-        sites_path = Path("data/input/sites.csv")
-
-        # If file already exists, load + sanitize; otherwise build it from observations
-        if sites_path.exists():
-            df = pd.read_csv(
-                sites_path,
-                sep=r"[,\s]+",        # accept comma, tab or whitespace
-                engine="python",
-                header=None
-            )
-            if df.shape[1] != 3:
-                raise ValueError(
-                    f"sites.csv should have 3 columns (E,N,Elev) but has {df.shape[1]}"
-                )
-            df.columns = ["easting", "northing", "elevation"]
-        else:
-            if self.observations is None:
-                raise ValueError("No observations loaded to create sites file.")
-            df = self.observations[["easting", "northing", "elevation"]].copy()
-
-        # Overwrite with whitespace-delimited format Tephra2 expects
-        df.to_csv(
-            sites_path,
-            sep=" ",
-            header=False,
-            index=False,
-            float_format="%.3f"
-        )
-        logging.info(f"Sites file sanitised at: {sites_path} ({len(df)} rows)")
-        return str(sites_path)
-    
-    def create_wind_file(self):
-        """
-        Create a wind file for tephra2.
-        
-        Returns:
-            str: Path to the created wind file
-        """
-        # Define path
-        wind_path = "data/input/wind.txt"
-        
-        # Get wind parameters from config
-        wind_params = self.config.get("wind", {})
-        max_height = wind_params.get("max_height", 30000)
-        interval = wind_params.get("interval", 1000)
-        wind_speed = wind_params.get("speed", 10)
-        wind_direction = wind_params.get("direction", 0)
-        
-        # Generate wind profile
-        heights = np.arange(0, max_height + interval, interval)
-        
-        # Write wind file
-        with open(wind_path, 'w') as f:
-            for h in heights:
-                f.write(f"{h} {wind_speed} {wind_direction}\n")
-        
-        logging.info(f"Wind file created at: {wind_path} with {len(heights)} levels")
-        
-        return wind_path
-    
-    def prepare_inputs(self):
-        """
-        Prepare all input files for tephra2.
-        
-        Returns:
-            tuple: Paths to the input files (config_path, sites_path, wind_path)
-        """
-        config_path = self.create_tephra2_config()
-        sites_path = self.create_sites_file()
-        wind_path = self.create_wind_file()
-        
-        return config_path, sites_path, wind_path
-    
     def run_inversion(self):
         """
         Run the Metropolis-Hastings inversion and return a results dict.
         """
-    
         # 0. Input files + exec permissions
         conf_path, sites_path, wind_path, _ = self._prepare_input_files()
-        self._ensure_executable(self.config["tephra2"]["executable"])
+        tephra2_exec = self.default_config["tephra2"]["executable"]
+        self._ensure_executable(tephra2_exec)
     
         # 1. Assemble MCMC vectors
         pcfg = self.config["parameters"]
         names = list(pcfg.keys())
     
         init_vals = np.array([pcfg[k]["initial_value"] for k in names])
-        prior_typ = np.array([pcfg[k]["prior_type"]     for k in names])
-        draw_scl  = np.array([
+        prior_typ = np.array([pcfg[k]["prior_type"] for k in names])
+        draw_scl = np.array([
             float(pcfg[k].get("draw_scale", 0) or 0.0)  # robust numeric
             for k in names
         ])
         prior_par = np.array([
-            [pcfg[k].get("prior_mean",  pcfg[k].get("prior_min", 0)),
-             pcfg[k].get("prior_std",   pcfg[k].get("prior_max", 0))]
+            [pcfg[k].get("prior_mean", pcfg[k].get("prior_min", 0)),
+             pcfg[k].get("prior_std", pcfg[k].get("prior_max", 0))]
             if pcfg[k]["prior_type"] == "Gaussian" else
-            [pcfg[k].get("prior_min",   0),
-             pcfg[k].get("prior_max",   0)]
+            [pcfg[k].get("prior_min", 0),
+             pcfg[k].get("prior_max", 0)]
             for k in names
         ])
     
         # 2. Runtime options
-        mcmc_cfg   = self.config.get("mcmc", {})
-        n_iter     = mcmc_cfg.get("n_iterations", 10000)
-        n_burn     = mcmc_cfg.get("n_burnin",     2000)
-        like_sig   = mcmc_cfg.get("likelihood_sigma", 0.25)
-        silent     = mcmc_cfg.get("silent", True)
-        snapshot   = mcmc_cfg.get("snapshot", 100)
+        mcmc_cfg = self.config.get("mcmc", {})
+        n_iter = mcmc_cfg.get("n_iterations", 10000)
+        n_burn = mcmc_cfg.get("n_burnin", 2000)
+        like_sig = mcmc_cfg.get("likelihood_sigma", 0.25)
+        silent = mcmc_cfg.get("silent", True)
+        snapshot = mcmc_cfg.get("snapshot", 1000)
     
         # 3. Run MH (will raise on fatal Tephra2 errors)
         mh = metropolis_hastings(
-            initial_plume   = init_vals,
-            prior_type      = prior_typ,
-            prior_para      = prior_par,
-            draw_scale      = draw_scl,
-            runs            = n_iter,
-            obs_load        = self.observations["observation"].values,
-            likelihood_sigma= like_sig,
-            conf_path       = Path(conf_path),
-            sites_csv       = Path(sites_path),
-            burnin          = n_burn,
-            silent          = silent,
-            snapshot        = snapshot,
+            initial_plume=init_vals,
+            prior_type=prior_typ,
+            prior_para=prior_par,
+            draw_scale=draw_scl,
+            runs=n_iter,
+            obs_load=self.observations["observation"].values,
+            likelihood_sigma=like_sig,
+            conf_path=Path(conf_path),
+            sites_csv=Path(sites_path),
+            burnin=n_burn,
+            silent=silent,
+            snapshot=snapshot,
         )
     
         # 4. Post-process
@@ -374,18 +231,17 @@ class TephraInversion:
         best_row = chain_df.iloc[best_idx]
     
         results = {
-            "chain":            chain_df,            # DataFrame → notebook-friendly
-            "posterior":        mh["posterior"],
-            "prior_array":      mh["prior"],
+            "chain": chain_df,                     # DataFrame → notebook-friendly
+            "posterior": mh["posterior"],
+            "prior_array": mh["prior"],
             "likelihood_array": mh["likelihood"],
-            "acceptance_rate":  mh["accept_rate"],
-            "burnin":           n_burn,
-            "best_params":      best_row,
-            "best_posterior":   mh["posterior"][best_idx],
+            "acceptance_rate": mh["accept_rate"],
+            "burnin": n_burn,
+            "best_params": best_row,
+            "best_posterior": mh["posterior"][best_idx],
         }
     
-        logging.info("MCMC finished: %d iters, accept=%.2f",
-                     n_iter, results["acceptance_rate"])
+        logging.info(f"MCMC finished: {n_iter} iters, accept={results['acceptance_rate']:.2f}")
     
         return results
 

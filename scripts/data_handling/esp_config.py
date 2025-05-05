@@ -5,6 +5,9 @@ import pandas as pd
 import importlib.util
 import sys
 
+# Global configuration
+DECIMAL_PRECISION = 2  # Number of decimal places for output values
+
 # Import DEFAULT_CONFIG from config/default_config.py
 def load_config():
     spec = importlib.util.spec_from_file_location(
@@ -40,14 +43,14 @@ def write_tephra2_conf(easting: float,
 
     with p.open("w") as f:
         for k, v in _FIXED_ROWS.items():
-            f.write(f"{k.upper()} {v:.6f}\n")
+            f.write(f"{k.upper()} {v:.{DECIMAL_PRECISION}f}\n")
 
-        f.write(f"VENT_EASTING   {easting:.3f}\n")
-        f.write(f"VENT_NORTHING  {northing:.3f}\n")
-        f.write(f"VENT_ELEVATION {elevation:.3f}\n")
+        f.write(f"VENT_EASTING   {easting:.{DECIMAL_PRECISION}f}\n")
+        f.write(f"VENT_NORTHING  {northing:.{DECIMAL_PRECISION}f}\n")
+        f.write(f"VENT_ELEVATION {elevation:.{DECIMAL_PRECISION}f}\n")
 
-        f.write(f"PLUME_HEIGHT   {plume_height:.3f}\n")
-        f.write(f"ERUPTION_MASS  {eruption_mass:.3f}\n")
+        f.write(f"PLUME_HEIGHT   {plume_height:.{DECIMAL_PRECISION}f}\n")
+        f.write(f"ERUPTION_MASS  {eruption_mass:.{DECIMAL_PRECISION}f}\n")
 
     print(f"tephra2.conf written → {p}")
     return p
@@ -71,20 +74,20 @@ def write_esp_input(easting: float = None,
             # Use log_m as the parameter name for esp_input
             rows.append([
                 "log_m",
-                log_m_value,
+                round(log_m_value, DECIMAL_PRECISION),
                 param_config["prior_type"],
-                log_m_value if param_config["prior_type"] == "Gaussian" else param_config["prior_para_a"],
-                param_config["prior_para_b"],
-                param_config["draw_scale"]
+                round(log_m_value, DECIMAL_PRECISION) if param_config["prior_type"] == "Gaussian" else round(param_config["prior_para_a"], DECIMAL_PRECISION),
+                round(param_config["prior_para_b"], DECIMAL_PRECISION),
+                round(param_config["draw_scale"], DECIMAL_PRECISION)
             ])
         else:
             rows.append([
                 param_name,
-                param_config["initial_val"],
+                round(param_config["initial_val"], DECIMAL_PRECISION),
                 param_config["prior_type"],
-                param_config["prior_para_a"],
-                param_config["prior_para_b"],
-                param_config["draw_scale"]
+                round(param_config["prior_para_a"], DECIMAL_PRECISION) if param_config["prior_type"] == "Gaussian" else param_config["prior_para_a"],
+                round(param_config["prior_para_b"], DECIMAL_PRECISION),
+                round(param_config["draw_scale"], DECIMAL_PRECISION)
             ])
     
     # Add fixed rows from _FIXED_ROWS dictionary
@@ -108,15 +111,15 @@ def write_esp_input(easting: float = None,
     
     for internal_name, value in _FIXED_ROWS.items():
         esp_name = param_mapping.get(internal_name, internal_name)
-        rows.append([esp_name, value, "Fixed", "", "", ""])
+        rows.append([esp_name, round(value, DECIMAL_PRECISION), "Fixed", "", "", ""])
     
     # Add vent location parameters if provided
     if easting is not None:
-        rows.append(["vent_x", easting, "Fixed", "", "", ""])
+        rows.append(["vent_x", round(easting, DECIMAL_PRECISION), "Fixed", "", "", ""])
     if northing is not None:
-        rows.append(["vent_y", northing, "Fixed", "", "", ""])
+        rows.append(["vent_y", round(northing, DECIMAL_PRECISION), "Fixed", "", "", ""])
     if elevation is not None:
-        rows.append(["vent_z", elevation, "Fixed", "", "", ""])
+        rows.append(["vent_z", round(elevation, DECIMAL_PRECISION), "Fixed", "", "", ""])
     
     df = pd.DataFrame(
         rows,
