@@ -24,7 +24,10 @@ wheels/
 *.egg
 
 # Virtual Environment
-tinvvenv/
+.venv/
+
+# Tephra2
+Tephra2/
 
 # IDE
 .idea/
@@ -45,12 +48,6 @@ data/input/observations/*.csv
 *.h5
 *.npy
 *.npz
-
-# Tephra2 files
-scripts/core/tephra2/Tephra2/
-scripts/core/tephra2/tephra2_2020
-scripts/core/tephra2/tephra2-inversion_2020
-
 # Logs
 *.log
 logs/
