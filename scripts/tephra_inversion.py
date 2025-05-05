@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import logging
-import stat
 from datetime import datetime
 from pathlib import Path
 
@@ -129,21 +128,6 @@ class TephraInversion:
             logging.error(f"Error loading ESP parameters: {str(e)}")
             raise
     
-    def _ensure_executable(self, path):
-        """
-        Ensure the tephra2 executable has proper permissions.
-        
-        Args:
-            path (str): Path to the tephra2 executable
-        """
-        if os.path.exists(path):
-            current_mode = os.stat(path).st_mode
-            os.chmod(path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-            logging.info(f"Set executable permissions for {path}")
-        else:
-            logging.error(f"Tephra2 executable not found at {path}")
-            raise FileNotFoundError(f"Tephra2 executable not found at {path}")
-    
     def _prepare_input_files(self):
         """
         Prepare the input files for tephra2.
@@ -175,10 +159,18 @@ class TephraInversion:
         """
         Run the Metropolis-Hastings inversion and return a results dict.
         """
-        # 0. Input files + exec permissions
-        conf_path, sites_path, wind_path, _ = self._prepare_input_files()
+        # 0. Input files + tephra2 path
+        conf_path, sites_path, wind_path, output_path = self._prepare_input_files()
         tephra2_exec = self.default_config["tephra2"]["executable"]
-        self._ensure_executable(tephra2_exec)
+        
+        # Ensure tephra2 executable has proper permissions
+        if os.path.exists(tephra2_exec):
+            current_mode = os.stat(tephra2_exec).st_mode
+            os.chmod(tephra2_exec, current_mode | 0o111)  # Add executable bit for all users
+            logging.info(f"Set executable permissions for {tephra2_exec}")
+        else:
+            logging.error(f"Tephra2 executable not found at {tephra2_exec}")
+            raise FileNotFoundError(f"Tephra2 executable not found at {tephra2_exec}")
     
         # 1. Assemble MCMC vectors
         pcfg = self.config["parameters"]
@@ -218,6 +210,8 @@ class TephraInversion:
             likelihood_sigma=like_sig,
             conf_path=Path(conf_path),
             sites_csv=Path(sites_path),
+            tephra2_path=tephra2_exec,
+            wind_path=wind_path,
             burnin=n_burn,
             silent=silent,
             snapshot=snapshot,
@@ -260,13 +254,11 @@ class TephraInversion:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         # Save parameter chain
-        chain_df = pd.DataFrame(results["chain"])
-        chain_df.columns = list(self.config["parameters"].keys())
-        chain_df.to_csv(f"{output_dir}/chain_{timestamp}.csv", index=False)
+        results["chain"].to_csv(f"{output_dir}/chain_{timestamp}.csv", index=False)
         
         # Save posterior values
         post_df = pd.DataFrame({
-            "posterior": results["post_chain"],
+            "posterior": results["posterior"],
             "prior": results["prior_array"],
             "likelihood": results["likelihood_array"]
         })
@@ -274,8 +266,8 @@ class TephraInversion:
         
         # Save best parameters
         best_params = pd.DataFrame({
-            "parameter": list(self.config["parameters"].keys()),
-            "value": results["best_params"]
+            "parameter": results["best_params"].index,
+            "value": results["best_params"].values
         })
         best_params.to_csv(f"{output_dir}/best_params_{timestamp}.csv", index=False)
         
@@ -318,21 +310,26 @@ class TephraInversion:
         # Get parameter names
         param_names = list(self.config["parameters"].keys())
         
+        # Get chain as numpy array if it's a DataFrame
+        chain = results["chain"].values if isinstance(results["chain"], pd.DataFrame) else results["chain"]
+        
         # Plot traces
         plt.figure(figsize=(12, 8))
         for i, param in enumerate(param_names):
             plt.subplot(len(param_names), 1, i+1)
-            plt.plot(results["chain"][burnin:, i])
+            plt.plot(chain[burnin:, i])
             plt.ylabel(param)
         plt.tight_layout()
         plt.savefig(f"{output_dir}/traces_{timestamp}.png")
+        plt.close()
         
         # Plot posterior
         plt.figure(figsize=(10, 6))
-        plt.plot(results["post_chain"][burnin:])
+        plt.plot(results["posterior"][burnin:])
         plt.xlabel("Iterations")
         plt.ylabel("Posterior")
         plt.savefig(f"{output_dir}/posterior_{timestamp}.png")
+        plt.close()
         
         # Plot parameter distributions
         n_params = len(param_names)
@@ -342,21 +339,24 @@ class TephraInversion:
         plt.figure(figsize=(ncols*4, nrows*3))
         for i, param in enumerate(param_names):
             plt.subplot(nrows, ncols, i+1)
-            plt.hist(results["chain"][burnin:, i], bins=30)
+            plt.hist(chain[burnin:, i], bins=30)
             plt.xlabel(param)
         plt.tight_layout()
         plt.savefig(f"{output_dir}/distributions_{timestamp}.png")
+        plt.close()
         
-        # Plot parameter correlations
-        plt.figure(figsize=(12, 12))
-        for i in range(n_params):
-            for j in range(n_params):
-                if i != j:
-                    plt.subplot(n_params, n_params, i*n_params + j + 1)
-                    plt.plot(results["chain"][burnin:, i], results["chain"][burnin:, j], 'o', markersize=1)
-                    plt.xlabel(param_names[i])
-                    plt.ylabel(param_names[j])
-        plt.tight_layout()
-        plt.savefig(f"{output_dir}/correlations_{timestamp}.png")
+        # Plot parameter correlations (if more than one parameter)
+        if n_params > 1:
+            plt.figure(figsize=(12, 12))
+            for i in range(n_params):
+                for j in range(n_params):
+                    if i != j:
+                        plt.subplot(n_params, n_params, i*n_params + j + 1)
+                        plt.plot(chain[burnin:, i], chain[burnin:, j], 'o', markersize=1)
+                        plt.xlabel(param_names[i])
+                        plt.ylabel(param_names[j])
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/correlations_{timestamp}.png")
+            plt.close()
         
         logging.info(f"Plots saved to {output_dir}")

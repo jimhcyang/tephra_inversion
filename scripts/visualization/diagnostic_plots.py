@@ -573,8 +573,8 @@ class DiagnosticPlotter:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
         # Histogram comparison
-        bins = np.logspace(np.log10(min(observed.min(), predicted.min())),
-                        np.log10(max(observed.max(), predicted.max())),
+        bins = np.logspace(np.log(min(observed.min(), predicted.min())),
+                        np.log(max(observed.max(), predicted.max())),
                         50)
         ax1.hist(observed, bins=bins, alpha=0.5, label='Observed', density=True)
         ax1.hist(predicted, bins=bins, alpha=0.5, label='Predicted', density=True)

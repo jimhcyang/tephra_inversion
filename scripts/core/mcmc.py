@@ -11,15 +11,13 @@ Parameter order we assume in the vector:
 
 Wind is fixed (wind.txt already present).
 """
-from __future__ import annotations
-import logging, subprocess, os
+import logging
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 from scipy.stats import norm, uniform
 
-from .mcmc_utils import changing_variable   # edits tephra2.conf
+from .tephra2_utils import run_tephra2
 
 # ─────────────────────────────────────────────────────────────
 # tqdm (progress-bar) – graceful fallback if library missing
@@ -46,6 +44,7 @@ def propose_gaussian(current, mask, scale):
 
 
 def propose_uniform(current, mask, lower, upper):
+    """Uniform proposal distribution where mask == True."""
     proposal = current.copy()
     proposal[mask] = np.random.uniform(lower, upper)
     return proposal
@@ -69,65 +68,28 @@ def draw_plume(current, prior_type, draw_scale, prior_para):
 #  Priors & likelihood
 # ---------------------------------------------------------------------------
 def log_prior(plume, prior_type, prior_para) -> float:
-    """Return Σ log10(prior_pdf)."""
+    """Return Σ ln(prior_pdf)."""
     logp = np.zeros_like(plume, dtype=float)
 
     mask_g = prior_type == "Gaussian"
     if mask_g.any():
         mu, sigma = prior_para[mask_g, 0], prior_para[mask_g, 1]
-        logp[mask_g] = np.log10(np.clip(norm.pdf(plume[mask_g], mu, sigma), 1e-300, None))
+        logp[mask_g] = np.log(np.clip(norm.pdf(plume[mask_g], mu, sigma), 1e-300, None))
 
     mask_u = prior_type == "Uniform"
     if mask_u.any():
         lo, hi = prior_para[mask_u, 0], prior_para[mask_u, 1]
-        logp[mask_u] = np.log10(np.clip(uniform.pdf(plume[mask_u], lo, hi-lo), 1e-300, None))
+        logp[mask_u] = np.log(np.clip(uniform.pdf(plume[mask_u], lo, hi-lo), 1e-300, None))
 
     return float(logp.sum())
 
 
 def log_likelihood(pred, obs, sigma) -> float:
-    """Gaussian likelihood in log10 space."""
+    """Gaussian likelihood in natural log space."""
     pred = np.clip(pred, 1e-3, None)
     obs  = np.clip(obs,  1e-3, None)
-    log_ratio = np.log10(obs / pred)
-    return float(np.log10(np.clip(norm.pdf(log_ratio, 0, sigma), 1e-300, None)).sum())
-
-# ---------------------------------------------------------------------------
-#  Tephra2 runner (auto-fix sites delimiter)
-# ---------------------------------------------------------------------------
-def _ensure_sites_format(sites_csv: Path):
-    """Re-write sites file as space-delimited E N Z."""
-    df = pd.read_csv(sites_csv, sep=r"[,\s]+", engine="python", header=None)
-    if df.shape[1] != 3:
-        raise ValueError(f"{sites_csv} must have 3 columns (E,N,Z); got {df.shape[1]}")
-    df.to_csv(sites_csv, sep=" ", header=False, index=False, float_format="%.3f")
-
-
-def run_tephra2(plume_vec,
-                conf_path: Path,
-                sites_csv: Path,
-                silent=True) -> np.ndarray:
-    """
-    Edit tephra2.conf, ensure sites file OK, run Tephra2 executable located at
-    <repo_root>/Tephra2/tephra2_2020, return deposit column (kg m⁻²).
-    """
-    changing_variable(plume_vec, conf_path)
-    _ensure_sites_format(sites_csv)
-
-    exe = Path(__file__).resolve().parents[2] / "Tephra2" / "tephra2_2020"
-    out_file = conf_path.parent / "tephra2_output_mcmc.txt"
-
-    cmd = [str(exe), str(conf_path), str(sites_csv), str(conf_path.parent / "wind.txt")]
-    res = subprocess.run(cmd, stdout=open(out_file, "w"),
-                         stderr=subprocess.PIPE, text=True)
-
-    if res.returncode != 0 or out_file.stat().st_size == 0:
-        raise RuntimeError(f"Tephra2 failed (exit {res.returncode}).\n--- STDERR ---\n{res.stderr}")
-
-    data = np.genfromtxt(out_file)
-    if data.ndim == 1:
-        data = data[np.newaxis, :]
-    return data[:, 3]     # mass-loading column
+    log_ratio = np.log(obs / pred)
+    return float(np.log(np.clip(norm.pdf(log_ratio, 0, sigma), 1e-300, None)).sum())
 
 # ---------------------------------------------------------------------------
 #  Main MH driver
@@ -136,9 +98,46 @@ def metropolis_hastings(
         initial_plume, prior_type, prior_para, draw_scale,
         runs, obs_load, likelihood_sigma,
         conf_path, sites_csv,
+        tephra2_path=None, wind_path=None,
         burnin=0, silent=True, snapshot=100) -> dict:
     """
-    Returns dict with keys:
+    Run Metropolis-Hastings MCMC algorithm for tephra inversion.
+    
+    Parameters
+    ----------
+    initial_plume : np.ndarray
+        Initial parameter vector (plume height, log mass, etc.)
+    prior_type : np.ndarray
+        Array of prior types ("Gaussian", "Uniform", "Fixed")
+    prior_para : np.ndarray
+        Array of prior parameters (mean/std for Gaussian, min/max for Uniform)
+    draw_scale : np.ndarray
+        Array of proposal distribution scale factors
+    runs : int
+        Number of MCMC iterations to run
+    obs_load : np.ndarray
+        Observed tephra deposit thicknesses
+    likelihood_sigma : float
+        Standard deviation for likelihood function
+    conf_path : Path or str
+        Path to tephra2 configuration file
+    sites_csv : Path or str
+        Path to sites file
+    tephra2_path : Path or str, optional
+        Path to tephra2 executable
+    wind_path : Path or str, optional
+        Path to wind file
+    burnin : int, default=0
+        Number of samples to discard as burn-in
+    silent : bool, default=True
+        Whether to suppress output
+    snapshot : int, default=100
+        Frequency to print status updates
+        
+    Returns
+    -------
+    dict
+        Dictionary with keys:
         chain, posterior, prior, likelihood, accept_rate, burnin
     """
     npar   = len(initial_plume)
@@ -149,7 +148,7 @@ def metropolis_hastings(
 
     # ── initial state ─────────────────────────────────────────
     chain[0] = initial_plume
-    pred0    = run_tephra2(chain[0], conf_path, sites_csv, silent)
+    pred0    = run_tephra2(chain[0], conf_path, sites_csv, tephra2_path, wind_path, silent=silent)
     like0    = log_likelihood(pred0, obs_load, likelihood_sigma)
     prior0   = log_prior(chain[0], prior_type, prior_para)
     post[0]  = like0 + prior0
@@ -162,12 +161,12 @@ def metropolis_hastings(
     for i in bar:
         proposal = draw_plume(chain[i-1], prior_type, draw_scale, prior_para)
 
-        pred_p  = run_tephra2(proposal, conf_path, sites_csv, silent)
+        pred_p  = run_tephra2(proposal, conf_path, sites_csv, tephra2_path, wind_path, silent=silent)
         like_p  = log_likelihood(pred_p, obs_load, likelihood_sigma)
         prior_p = log_prior(proposal, prior_type, prior_para)
         post_p  = like_p + prior_p
 
-        if np.random.rand() < np.exp((post_p - post[i-1]) * np.log(10)):     # log10→ln
+        if np.random.rand() < np.exp(post_p - post[i-1]):     # Using natural log directly
             chain[i] = proposal
             post[i]  = post_p
             prior_arr[i], like_arr[i] = prior_p, like_p
@@ -188,12 +187,3 @@ def metropolis_hastings(
         "accept_rate": accept / runs,
         "burnin": burnin
     }
-
-# ---------------------------------------------------------------------------
-#  Deprecated wrappers for legacy imports
-# ---------------------------------------------------------------------------
-def prior_function(prior_type, plume_vec, prior_para):
-    return log_prior(plume_vec, prior_type, prior_para)
-
-def likelihood_function(prediction, observation, sigma):
-    return log_likelihood(prediction, observation, sigma)
