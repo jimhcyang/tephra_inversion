@@ -9,7 +9,29 @@ DEFAULT_CONFIG = {
     
     # Default parameters for Tephra2
     "parameters": {
+        "true_values": {
+            "plume_height": 10000,
+            "eruption_mass": 2.5e10  # kg
+        },
+        "variable": {
+            "column_height": {
+                "initial_val": 10000,
+                "prior_type": "Gaussian",
+                "prior_para_a": 10000,  # mean
+                "prior_para_b": 2000,   # std
+                "draw_scale": 50
+            },
+            "eruption_mass": {
+                "initial_val": 2.5e10,  # will be calculated from eruption_mass
+                "prior_type": "Gaussian",
+                "prior_para_a": 2.5e10,  # mean (will be replaced)
+                "prior_para_b": 1,        # std
+                "draw_scale": 0.25
+            }
+        },
         "fixed": {
+            "alpha": 3.4,
+            "beta": 2.0,
             "max_grainsize": -6,
             "min_grainsize": 6,
             "median_grainsize": -1,

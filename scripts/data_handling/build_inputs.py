@@ -22,9 +22,7 @@ from .esp_config         import write_tephra2_conf, write_esp_input
 
 def build_all(vent_lat: float,
               vent_lon: float,
-              vent_elev: float,
-              plume_height: float = 10000,
-              eruption_mass: float = 2.5e10,  # kg
+              vent_elev: float, # kg
               base_dir: str = "data/input"):
     base = Path(base_dir)
 
@@ -37,13 +35,9 @@ def build_all(vent_lat: float,
     easting, northing, _ = latlon_to_utm(vent_lat, vent_lon, vent_elev)
 
     # 3. Write tephra2.conf (19 rows)
-    write_tephra2_conf(easting, northing, vent_elev,
-                       plume_height, eruption_mass)
+    write_tephra2_conf(easting, northing, vent_elev)
 
-    # 4. Natural-log mass (base-e!)
-    log_m_e = np.log(eruption_mass)
-
-    # 5. Write esp_input.csv
-    write_esp_input(plume_height, log_m_e)
+    # 4. Write esp_input.csv
+    write_esp_input(easting, northing, vent_elev)
 
     print("[INFO] Input bundle ready.")

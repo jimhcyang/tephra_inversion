@@ -134,7 +134,7 @@ class ObservationHandler:
         plt.figure(figsize=(10, 8))
         scatter = plt.scatter(sites[:, 0], sites[:, 1], 
                             c=observations, 
-                            cmap='viridis',
+                            cmap='Rd_Bu_r',
                             s=50,
                             norm=plt.Normalize(vmin=np.min(observations), vmax=np.max(observations)))
         plt.colorbar(scatter, label='Mass Loading (kg/m²)')
