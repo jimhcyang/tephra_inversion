@@ -15,18 +15,18 @@ DEFAULT_CONFIG = {
         },
         "variable": {
             "column_height": {
-                "initial_val": 10000,
+                "initial_val": 7500,
                 "prior_type": "Gaussian",
-                "prior_para_a": 10000,  # mean
-                "prior_para_b": 2000,   # std
+                "prior_para_a": 7500,  # mean
+                "prior_para_b": 1500,   # std
                 "draw_scale": 50
             },
             "eruption_mass": {
-                "initial_val": 2.5e10,  # will be calculated from eruption_mass
+                "initial_val": 1e10,  # will be calculated from eruption_mass
                 "prior_type": "Gaussian",
-                "prior_para_a": 2.5e10,  # mean (will be replaced)
+                "prior_para_a": 1e10,  # mean (will be replaced)
                 "prior_para_b": 1,        # std
-                "draw_scale": 0.25
+                "draw_scale": 0.1
             }
         },
         "fixed": {

@@ -1,117 +1,130 @@
-# scripts/data_handling/wind_data.py
+"""wind_data.py
+~~~~~~~~~~~~
+Helper for *wind profile* handling:
 
-import os
+- Loads whitespace-separated files, skipping commented lines.
+- Synthesises a Gaussian/linear profile when missing.
+- Optional 3-panel diagnostic plot.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Dict
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
-from typing import Dict, Union, Optional
+
+LOGGER = logging.getLogger(__name__)
+
 
 class WindDataHandler:
-    def __init__(self, output_dir: Union[str, Path] = "data/input"):
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-    
-    def generate_wind_data(self, params: Dict) -> pd.DataFrame:
-        """
-        Generate synthetic wind data using Gaussian model.
-        
-        Parameters
-        ----------
-        params : Dict
-            Wind parameters with keys:
-            - wind_direction: predominant wind direction in degrees
-            - max_wind_speed: maximum wind speed in m/s
-            - elevation_max_speed: elevation of maximum speed in meters
-            - zero_elevation: elevation where wind speed is zero in meters
-            
-        Returns
-        -------
-        pd.DataFrame
-            Wind data with HEIGHT, SPEED, DIRECTION columns
-        """
-        heights = np.linspace(0, 30000, 20)  # 20 points from 0 to 30000m
-        
-        # Gaussian wind speed profile
-        if "elevation_max_speed" in params:
-            max_elev = params["elevation_max_speed"]
-            sigma = max_elev / 2  # standard deviation based on max elevation
-        else:
-            max_elev = 5000
-            sigma = 2500
-            
-        speeds = params.get("max_wind_speed", 30) * np.exp(
-            -((heights - max_elev)**2) / (2 * sigma**2)
-        )
-        
-        # Optional: vary wind direction with height
-        if "direction_variation" in params and params["direction_variation"]:
-            # Wind direction that varies with height
-            base_dir = params.get("wind_direction", 180)
-            directions = base_dir + 20 * np.sin(heights / 5000)
-        else:
-            # Constant wind direction
-            directions = np.full_like(heights, params.get("wind_direction", 180))
-        
-        # Create DataFrame
-        wind_df = pd.DataFrame({
-            'HEIGHT': heights,
-            'SPEED': speeds,
-            'DIRECTION': directions
-        })
-        
-        return wind_df
-    
-    def save_wind_data(self, data: Union[np.ndarray, pd.DataFrame], 
-                     filename: str = "wind.txt") -> Path:
-        """Save wind data to file and return the file path."""
-        # If filename is a full path, use it directly
-        if os.path.isabs(filename):
-            output_path = Path(filename)
-        else:
-            output_path = self.output_dir / filename
-            
-        # Ensure the directory exists
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Format data for saving
-        if isinstance(data, pd.DataFrame):
-            header = "#HEIGHT SPEED DIRECTION"
-            np.savetxt(
-                output_path,
-                data.values,
-                fmt="%.1f",
-                header=header,
-                comments=""
-            )
-        else:
-            header = "#HEIGHT SPEED DIRECTION"
-            np.savetxt(
-                output_path,
-                data,
-                fmt="%.1f",
-                header=header,
-                comments=""
-            )
-        
-        print(f"Wind data saved to: {output_path}")
-        return output_path
+    default_params: Dict = {
+        "direction_mean": 180.0,
+        "direction_sd": 30.0,
+        "max_speed": 50.0,
+        "elevation_max_speed": 15000.0,
+        "zero_elevation": 40000.0,
+        "n_levels": 50,
+        "seed": 42,
+    }
 
-    def load_wind_data(self, filename: Union[str, Path]) -> pd.DataFrame:
-        """Load wind data from a file."""
-        filepath = Path(filename)
-        if not filepath.exists():
-            raise FileNotFoundError(f"Wind data file not found: {filepath}")
-            
-        try:
-            # Read the wind data file
-            df = pd.read_csv(
-                filepath,
-                delim_whitespace=True,
-                comment='#',
-                names=['HEIGHT', 'SPEED', 'DIRECTION']
-            )
-            
-            return df
-            
-        except Exception as e:
-            raise ValueError(f"Error loading wind data: {e}")
+    def __init__(self, base_dir: str | Path) -> None:
+        self.base_dir = Path(base_dir)
+
+    def load_wind_data(
+        self,
+        filename: str = "wind.txt"
+    ) -> pd.DataFrame:
+        path = self.base_dir / filename
+        if not path.exists():
+            raise FileNotFoundError(f"Wind file not found: {filename}")
+        # Skip commented lines starting with '#'
+        df = pd.read_csv(
+            path,
+            sep=r"\s+",
+            comment="#",
+            header=None,
+            names=["HEIGHT", "SPEED", "DIRECTION"],
+            engine="python",
+            dtype=float,
+        )
+        LOGGER.info("Loaded wind profile from %s", path)
+        return df
+
+    def save_wind_data(
+        self, df: pd.DataFrame, filename: str = "wind.txt"
+    ) -> Path:
+        path = self.base_dir / filename
+        df.to_csv(path, sep=" ", header=False, index=False, float_format="%.6f")
+        LOGGER.info("Wind profile saved → %s", path)
+        return path
+
+    def generate_wind_data(
+        self,
+        *,
+        direction_mean: float = 180.0,
+        direction_sd: float = 30.0,
+        max_speed: float = 50.0,
+        elevation_max_speed: float = 15000.0,
+        zero_elevation: float = 40000.0,
+        n_levels: int = 50,
+        seed: int = 42,
+    ) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        heights = np.linspace(1000, 50000, n_levels)
+        speeds = np.where(
+            heights <= elevation_max_speed,
+            max_speed * heights / elevation_max_speed,
+            max_speed
+            * np.clip(
+                (zero_elevation - heights) / (zero_elevation - elevation_max_speed),
+                0,
+                1,
+            ),
+        )
+        speeds += rng.normal(0, max_speed * 0.05, n_levels)
+        speeds = np.clip(speeds, 0, None)
+
+        directions = np.mod(rng.normal(direction_mean, direction_sd, n_levels), 360)
+
+        df = pd.DataFrame({"HEIGHT": heights, "SPEED": speeds, "DIRECTION": directions})
+        LOGGER.info("Generated synthetic wind profile (%d levels)", n_levels)
+        return df
+
+    def plot_wind_profile(self, df: pd.DataFrame) -> None:
+        """Optional: local 3-panel diagnostic."""
+        import matplotlib.pyplot as plt
+
+        elev = df["HEIGHT"].to_numpy()
+        spd = df["SPEED"].to_numpy()
+        dirc = df["DIRECTION"].to_numpy()
+
+        order = np.argsort(elev)
+        elev, spd, dirc = elev[order], spd[order], dirc[order]
+
+        fig = plt.figure(figsize=(15, 5))
+        # speed vs altitude
+        ax1 = fig.add_subplot(1, 3, 1)
+        ax1.plot(elev, spd, "-o")
+        ax1.set_xlabel("Altitude (m)")
+        ax1.set_ylabel("Speed (m/s)")
+        ax1.set_title("Speed vs altitude")
+
+        # direction vs altitude
+        ax2 = fig.add_subplot(1, 3, 2)
+        ax2.plot(elev, dirc, "-o")
+        ax2.set_xlabel("Altitude (m)")
+        ax2.set_ylabel("Direction (°)")
+        ax2.set_title("Direction vs altitude")
+
+        # polar
+        ax3 = fig.add_subplot(1, 3, 3, projection="polar")
+        ax3.plot(np.radians(dirc), elev, "-o")
+        ax3.set_theta_zero_location("N")
+        ax3.set_theta_direction(-1)
+        ax3.set_title("Polar")
+
+        fig.tight_layout()
+        plt.show()
