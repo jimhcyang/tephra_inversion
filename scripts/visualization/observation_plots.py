@@ -91,11 +91,17 @@ class ObservationPlotter:
         fig, ax = plt.subplots(figsize=(8, 8))
 
         # DEM background (optional)
-        try:
-            dem = rxr.open_rasterio(dem_path)
-            dem.plot(ax=ax, cmap="gray_r", add_colorbar=False)
-        except Exception as exc:
-            print(f"[WARNING] Could not open '{dem_path}' for background map.")
+        dem_loaded = False
+        if dem_path and dem_path.lower() != "none":
+            try:
+                dem = rxr.open_rasterio(dem_path)
+                dem.plot(ax=ax, cmap="gray_r", add_colorbar=False)
+                dem_loaded = True
+            except Exception as exc:
+                print(f"[WARNING] Could not open '{dem_path}' for background map: {exc}")
+        
+        if not dem_loaded:
+            print("[INFO] Using plain background for isomass map")
 
         # Contours for solid and dashed lines
         lv_solid = [2 ** (2 * i + 1) for i in range(7)]   # 2, 8, 32, 128, 512, 2048, 8192
