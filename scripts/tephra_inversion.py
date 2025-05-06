@@ -1,362 +1,331 @@
+# tephra_inversion.py
 import os
 import sys
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, Tuple
+
+import numpy as np
+import pandas as pd
+
+from scripts.core.mcmc import metropolis_hastings
+from scripts.data_handling.build_inputs import build_all
+from scripts.data_handling.observation_data import ObservationHandler
+from scripts.data_handling.esp_config import load_config
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('tephra_inversion.log')
+        logging.FileHandler("tephra_inversion.log")
     ]
 )
+LOGGER = logging.getLogger(__name__)
 
-# Import core modules
-from scripts.core.mcmc import metropolis_hastings
-from scripts.data_handling.esp_config import load_config
 
 class TephraInversion:
     """
-    Class for performing inversion of tephra2 model using MCMC.
+    Class for performing inversion of Tephra2 model using MCMC.
     """
-    
-    def __init__(self, config={}, observations=None):
-        """
-        Initialize the TephraInversion class.
-        
-        Args:
-            config (dict): Configuration dictionary for the inversion
-            observations (pd.DataFrame, optional): Observed deposit data
-        """
-        self.config = config
-        
-        # Load default configuration
+
+    def __init__(
+        self,
+        vent_lat: float,
+        vent_lon: float,
+        vent_elev: float,
+        config: Dict = None
+    ):
+        # 1) Load DEFAULT_CONFIG from config/default_config.py
         self.default_config = load_config()
-        
-        # If config doesn't contain mcmc settings, use default
-        if "mcmc" not in self.config:
-            self.config["mcmc"] = self.default_config["mcmc"]
-        
+
+        # 2) Merge in user-supplied config
+        self.config = {}
+        # First take all default keys
+        for section, vals in self.default_config.items():
+            self.config[section] = vals.copy()
+        # Then override with any user-provided top-level keys
+        config = config or {}
+        for k, v in config.items():
+            if isinstance(v, dict) and k in self.config:
+                # merge sub-dict
+                self.config[k].update(v)
+            else:
+                # override entire section
+                self.config[k] = v
+
         # Ensure directories exist
-        os.makedirs("data/input", exist_ok=True)
-        os.makedirs("data/output", exist_ok=True)
-        
-        # If observations not provided, load them from files
-        if observations is None:
-            try:
-                # Load observation mass from CSV
-                obs_vec = np.loadtxt("data/input/observations.csv")  # 1-D array
-                
-                # Check the file format first
-                with open("data/input/sites.csv", "r") as f:
-                    first_line = f.readline().strip()
-                
-                # Determine separator based on first line
-                if "," in first_line:
-                    sites_ar = pd.read_csv("data/input/sites.csv", sep=",", header=None).values
-                    logging.info("Using comma separator for sites.csv")
-                else:
-                    sites_ar = pd.read_csv("data/input/sites.csv", sep=r"\s+", header=None).values
-                    logging.info("Using whitespace separator for sites.csv")
-                
-                # Create observations dataframe
-                self.observations = pd.DataFrame({
-                    "easting":      sites_ar[:, 0],
-                    "northing":     sites_ar[:, 1],
-                    "elevation":    sites_ar[:, 2],
-                    "observation":  obs_vec,
-                })
-                
-                logging.info(f"Loaded {len(self.observations)} observations automatically")
-            except Exception as e:
-                logging.error(f"Error loading observations: {str(e)}")
-                raise ValueError("Observations must be provided or available in data/input/ directory")
-        else:
-            self.observations = observations
-        
-        # Load ESP input parameters
-        self._load_esp_parameters()
-        
-        logging.info("TephraInversion initialized")
-    
-    def _load_esp_parameters(self):
-        """
-        Load parameters from esp_input.csv file
-        """
-        try:
-            # Check if esp_input.csv exists
-            esp_input_path = Path("data/input/esp_input.csv")
-            if not esp_input_path.exists():
-                logging.warning("esp_input.csv not found, will use provided config only")
-                return
-                
-            # Read parameters from file
-            esp_params = pd.read_csv(esp_input_path)
-            logging.info(f"Loaded {len(esp_params)} parameters from esp_input.csv")
-            
-            # If we have a parameters section in config already, update it with ESP parameters
-            if "parameters" not in self.config:
-                self.config["parameters"] = {}
-                
-            # Get variable parameters (non-Fixed)
-            for _, row in esp_params[esp_params['prior_type'] != 'Fixed'].iterrows():
-                param_name = row['variable_name']
-                self.config["parameters"][param_name] = {
-                    "initial_value": row['initial_val'],
-                    "prior_type": row['prior_type'],
-                    "prior_mean" if row['prior_type'] == "Gaussian" else "prior_min": row['prior_para_a'],
-                    "prior_std" if row['prior_type'] == "Gaussian" else "prior_max": row['prior_para_b'],
-                    "draw_scale": row['draw_scale']
-                }
-                
-            # Get fixed parameters
-            for _, row in esp_params[esp_params['prior_type'] == 'Fixed'].iterrows():
-                param_name = row['variable_name']
-                self.config["parameters"][param_name] = {
-                    "initial_value": row['initial_val'],
-                    "prior_type": "Fixed",
-                    "draw_scale": ""
-                }
-                
-        except Exception as e:
-            logging.error(f"Error loading ESP parameters: {str(e)}")
-            raise
-    
-    def _prepare_input_files(self):
-        """
-        Prepare the input files for tephra2.
-        
-        Returns:
-            tuple: Paths to the input files (config_path, sites_path, wind_path, output_path)
-        """
-        # Define paths
-        config_path = "data/input/tephra2.conf"
-        sites_path = "data/input/sites.csv"
-        wind_path = "data/input/wind.txt"
-        output_path = "data/output/tephra2_output_mcmc.txt"
-        
-        # Verify files exist
-        for path in [config_path, sites_path, wind_path]:
-            if not os.path.exists(path):
-                logging.error(f"Input file not found: {path}")
-                raise FileNotFoundError(f"Input file not found: {path}")
-        
-        # Log paths
-        logging.info(f"Using config file: {config_path}")
-        logging.info(f"Using sites file: {sites_path}")
-        logging.info(f"Using wind file: {wind_path}")
-        logging.info(f"Output will be written to: {output_path}")
-        
-        return config_path, sites_path, wind_path, output_path
-    
-    def run_inversion(self):
-        """
-        Run the Metropolis-Hastings inversion and return a results dict.
-        """
-        # 0. Input files + tephra2 path
-        conf_path, sites_path, wind_path, output_path = self._prepare_input_files()
-        tephra2_exec = self.default_config["tephra2"]["executable"]
-        
-        # Ensure tephra2 executable has proper permissions
-        if os.path.exists(tephra2_exec):
-            current_mode = os.stat(tephra2_exec).st_mode
-            os.chmod(tephra2_exec, current_mode | 0o111)  # Add executable bit for all users
-            logging.info(f"Set executable permissions for {tephra2_exec}")
-        else:
-            logging.error(f"Tephra2 executable not found at {tephra2_exec}")
-            raise FileNotFoundError(f"Tephra2 executable not found at {tephra2_exec}")
-    
-        # 1. Assemble MCMC vectors
-        pcfg = self.config["parameters"]
-        names = list(pcfg.keys())
-    
-        init_vals = np.array([pcfg[k]["initial_value"] for k in names])
-        prior_typ = np.array([pcfg[k]["prior_type"] for k in names])
-        draw_scl = np.array([
-            float(pcfg[k].get("draw_scale", 0) or 0.0)  # robust numeric
-            for k in names
-        ])
-        prior_par = np.array([
-            [pcfg[k].get("prior_mean", pcfg[k].get("prior_min", 0)),
-             pcfg[k].get("prior_std", pcfg[k].get("prior_max", 0))]
-            if pcfg[k]["prior_type"] == "Gaussian" else
-            [pcfg[k].get("prior_min", 0),
-             pcfg[k].get("prior_max", 0)]
-            for k in names
-        ])
-    
-        # 2. Runtime options
-        mcmc_cfg = self.config.get("mcmc", {})
-        n_iter = mcmc_cfg.get("n_iterations", 10000)
-        n_burn = mcmc_cfg.get("n_burnin", 2000)
-        like_sig = mcmc_cfg.get("likelihood_sigma", 0.25)
-        silent = mcmc_cfg.get("silent", True)
-        snapshot = mcmc_cfg.get("snapshot", 1000)
-    
-        # 3. Run MH (will raise on fatal Tephra2 errors)
-        mh = metropolis_hastings(
-            initial_plume=init_vals,
-            prior_type=prior_typ,
-            prior_para=prior_par,
-            draw_scale=draw_scl,
-            runs=n_iter,
-            obs_load=self.observations["observation"].values,
-            likelihood_sigma=like_sig,
-            conf_path=Path(conf_path),
-            sites_csv=Path(sites_path),
-            tephra2_path=tephra2_exec,
-            wind_path=wind_path,
-            burnin=n_burn,
-            silent=silent,
-            snapshot=snapshot,
+        self.base_input  = Path(self.config["paths"]["input_dir"])
+        self.base_output = Path(self.config["paths"]["output_dir"])
+        self.base_input.mkdir(parents=True, exist_ok=True)
+        self.base_output.mkdir(parents=True, exist_ok=True)
+
+        # Build or load all inputs (and diagnostic plots if desired)
+        self.conf_path, self.esp_path, self.wind_path = build_all(
+            vent_lat           = vent_lat,
+            vent_lon           = vent_lon,
+            vent_elev          = vent_elev,
+            base_dir           = self.base_input,
+            load_observations  = self.config["mcmc"].get("load_observations", True),
+            load_wind          = self.config["mcmc"].get("load_wind", True),
+            obs_params         = self.config["mcmc"].get("obs_params", {}),
+            wind_params        = self.config["mcmc"].get("wind_params", {}),
+            show_plots         = self.config["mcmc"].get("show_plots", False),
         )
-    
-        # 4. Post-process
-        chain_np = mh["chain"]                       # (n_iter+1, n_param)
-        chain_df = pd.DataFrame(chain_np, columns=names)
-    
-        best_idx = np.argmax(mh["posterior"])
-        best_row = chain_df.iloc[best_idx]
-    
+
+        # Load observations into a DataFrame
+        obs_handler = ObservationHandler(self.base_input)
+        obs_vec, sites = obs_handler.load_observations()
+        self.observations = pd.DataFrame({
+            "easting":     sites[:, 0],
+            "northing":    sites[:, 1],
+            "elevation":   sites[:, 2],
+            "observation": obs_vec,
+        })
+        LOGGER.info("Loaded %d observations", len(self.observations))
+
+        # Load ESP parameters into self.config["parameters"]
+        self._load_esp_parameters()
+        LOGGER.info("TephraInversion initialized")
+
+    def _load_esp_parameters(self) -> None:
+        """
+        Read esp_input.csv and populate self.config["parameters"].
+        """
+        esp_path = self.base_input / "esp_input.csv"
+        if not esp_path.exists():
+            LOGGER.warning("esp_input.csv not found; using default parameters")
+            return
+
+        df = pd.read_csv(esp_path)
+        LOGGER.info("Loaded %d ESP rows", len(df))
+
+        params: Dict[str, Dict] = {}
+        for _, row in df.iterrows():
+            name = row["variable_name"]
+            if row["prior_type"] == "Fixed":
+                params[name] = {
+                    "initial_value": float(row["initial_val"]),
+                    "prior_type":     "Fixed",
+                    "draw_scale":     0.0,
+                }
+            else:
+                entry: Dict = {
+                    "initial_value": float(row["initial_val"]),
+                    "prior_type":     row["prior_type"],
+                    "draw_scale":     float(row.get("draw_scale") or 0.0),
+                }
+                if row["prior_type"] == "Gaussian":
+                    entry["prior_mean"] = float(row["prior_para_a"])
+                    entry["prior_std"]  = float(row["prior_para_b"])
+                else:
+                    entry["prior_min"] = float(row["prior_para_a"])
+                    entry["prior_max"] = float(row["prior_para_b"])
+                params[name] = entry
+
+        self.config["parameters"] = params
+
+    def _prepare_input_files(self) -> Tuple[str, str, str, str]:
+        """
+        Confirm existence of input files and return their paths plus the
+        Tephra2 output path.
+        """
+        cfg   = str(self.conf_path)
+        sites = str(self.base_input / "sites.csv")
+        wind  = str(self.wind_path)
+        out   = str(self.config["tephra2"]["output_file"])
+
+        for p in (cfg, sites, wind):
+            if not os.path.exists(p):
+                LOGGER.error("Input file missing: %s", p)
+                raise FileNotFoundError(p)
+
+        LOGGER.info("Using config: %s", cfg)
+        LOGGER.info("Using sites:  %s", sites)
+        LOGGER.info("Using wind:   %s", wind)
+        LOGGER.info("Tephra2 will write to: %s", out)
+        return cfg, sites, wind, out
+
+    def run_inversion(self) -> Dict:
+        """
+        Execute MCMC inversion and return a results dict.
+        """
+        cfg_path, sites_path, wind_path, out_path = self._prepare_input_files()
+        tephra2_exec = self.config["tephra2"]["executable"]
+
+        # Ensure executable permissions
+        if os.path.exists(tephra2_exec):
+            os.chmod(
+                tephra2_exec,
+                os.stat(tephra2_exec).st_mode | 0o111
+            )
+            LOGGER.info("Tephra2 exec ready: %s", tephra2_exec)
+        else:
+            LOGGER.error("Tephra2 exec not found at %s", tephra2_exec)
+            raise FileNotFoundError(tephra2_exec)
+
+        # Prepare parameter vectors
+        names      = list(self.config["parameters"].keys())
+        pcfg       = self.config["parameters"]
+        initial    = np.array([pcfg[n]["initial_value"] for n in names], dtype=float)
+        ptype      = np.array([pcfg[n]["prior_type"]    for n in names], dtype=object)
+        draw_scale = np.array([
+            float(pcfg[n].get("draw_scale") or 0.0)
+            for n in names
+        ], dtype=float)
+
+        # Build prior parameter array
+        prior_para = []
+        for n in names:
+            entry = pcfg[n]
+            if entry["prior_type"] == "Gaussian":
+                prior_para.append([entry["prior_mean"], entry["prior_std"]])
+            else:
+                prior_para.append([
+                    entry.get("prior_min", 0.0),
+                    entry.get("prior_max", 0.0)
+                ])
+        prior_para = np.array(prior_para, dtype=float)
+
+        # Merge MCMC defaults + overrides
+        mcmc_def = self.default_config["mcmc"]
+        mcmc_usr = self.config.get("mcmc", {})
+        mcmc     = {**mcmc_def, **mcmc_usr}
+
+        runs     = int(mcmc["n_iterations"])
+        burnin   = int(mcmc["n_burnin"])
+        log_sigma= float(mcmc["likelihood_sigma"])
+        silent   = bool(mcmc["silent"])
+        snapshot = int(mcmc["snapshot"])
+        # thinning, seed, etc could also be pulled here if needed
+
+        # Run Metropolis–Hastings
+        mh = metropolis_hastings(
+            initial_plume    = initial,
+            prior_type       = ptype,
+            prior_para       = prior_para,
+            draw_scale       = draw_scale,
+            runs             = runs,
+            obs_load         = self.observations["observation"].values,
+            likelihood_sigma = log_sigma,
+            conf_path        = Path(cfg_path),
+            sites_csv        = Path(sites_path),
+            tephra2_path     = tephra2_exec,
+            wind_path        = wind_path,
+            burnin           = burnin,
+            silent           = silent,
+            snapshot         = snapshot,
+        )
+
+        # Wrap results
+        chain_df  = pd.DataFrame(mh["chain"], columns=names)
+        posterior = mh["posterior"]
+        best_idx  = int(np.argmax(posterior))
+        best_row  = chain_df.iloc[best_idx]
+
         results = {
-            "chain": chain_df,                     # DataFrame → notebook-friendly
-            "posterior": mh["posterior"],
-            "prior_array": mh["prior"],
+            "chain":            chain_df,
+            "posterior":        posterior,
+            "prior_array":      mh["prior"],
             "likelihood_array": mh["likelihood"],
-            "acceptance_rate": mh["accept_rate"],
-            "burnin": n_burn,
-            "best_params": best_row,
-            "best_posterior": mh["posterior"][best_idx],
+            "acceptance_rate":  mh["accept_rate"],
+            "burnin":           burnin,
+            "best_params":      best_row,
+            "best_posterior":   float(posterior[best_idx]),
         }
-    
-        logging.info(f"MCMC finished: {n_iter} iters, accept={results['acceptance_rate']:.2f}")
-    
+        LOGGER.info(
+            "MCMC finished: %d iters, accept=%.2f",
+            runs, results["acceptance_rate"]
+        )
         return results
 
-    def save_results(self, results, output_dir="results"):
+    def save_results(self, results: Dict, output_dir: str = None) -> None:
         """
-        Save inversion results to files.
-        
-        Args:
-            results (dict): Results of the inversion
-            output_dir (str, optional): Directory to save results to
+        Save chain, posterior/prior/likelihood, best_params, and run_info.
         """
-        # Create output directory
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Generate timestamp for filenames
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save parameter chain
-        results["chain"].to_csv(f"{output_dir}/chain_{timestamp}.csv", index=False)
-        
-        # Save posterior values
-        post_df = pd.DataFrame({
-            "posterior": results["posterior"],
-            "prior": results["prior_array"],
-            "likelihood": results["likelihood_array"]
-        })
-        post_df.to_csv(f"{output_dir}/posterior_{timestamp}.csv", index=False)
-        
-        # Save best parameters
-        best_params = pd.DataFrame({
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        od = Path(output_dir or self.config["paths"]["mcmc_dir"])
+        od.mkdir(parents=True, exist_ok=True)
+
+        results["chain"].to_csv(od / f"chain_{ts}.csv", index=False)
+        pd.DataFrame({
+            "posterior":  results["posterior"],
+            "prior":      results["prior_array"],
+            "likelihood": results["likelihood_array"],
+        }).to_csv(od / f"posterior_{ts}.csv", index=False)
+        pd.DataFrame({
             "parameter": results["best_params"].index,
-            "value": results["best_params"].values
-        })
-        best_params.to_csv(f"{output_dir}/best_params_{timestamp}.csv", index=False)
-        
-        # Save run information
-        run_info = {
-            "timestamp": timestamp,
-            "n_iterations": self.config["mcmc"]["n_iterations"],
-            "n_parameters": len(self.config["parameters"]),
-            "acceptance_rate": results["acceptance_rate"],
-            "best_posterior": results["best_posterior"]
-        }
-        
-        with open(f"{output_dir}/run_info_{timestamp}.txt", 'w') as f:
-            for key, value in run_info.items():
-                f.write(f"{key}: {value}\n")
-        
-        logging.info(f"Results saved to {output_dir}")
-        
-        return f"{output_dir}/chain_{timestamp}.csv"
-    
-    def plot_results(self, results, output_dir="results", burnin=None):
+            "value":     results["best_params"].values,
+        }).to_csv(od / f"best_params_{ts}.csv", index=False)
+
+        # Write run info, pulling n_iterations from the merged config
+        mcmc_cfg = self.config.get("mcmc", {})
+        n_iter   = mcmc_cfg.get("n_iterations", None)
+        with open(od / f"run_info_{ts}.txt", "w") as fh:
+            fh.write(f"timestamp: {ts}\n")
+            fh.write(f"n_iterations: {n_iter}\n")
+            fh.write(f"acceptance_rate: {results['acceptance_rate']:.4f}\n")
+            fh.write(f"best_posterior: {results['best_posterior']:.4f}\n")
+
+        LOGGER.info("Results saved to %s", od)
+
+    def plot_results(self, results: Dict, output_dir: str = None) -> None:
         """
-        Plot inversion results.
-        
-        Args:
-            results (dict): Results of the inversion
-            output_dir (str, optional): Directory to save plots to
-            burnin (int, optional): Number of samples to discard as burn-in
+        Produce trace, posterior curve, histograms, and correlation plots.
         """
-        # Create output directory
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Generate timestamp for filenames
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Set burnin if not provided
-        if burnin is None:
-            burnin = int(self.config["mcmc"].get("n_burnin", 0))
-        
-        # Get parameter names
-        param_names = list(self.config["parameters"].keys())
-        
-        # Get chain as numpy array if it's a DataFrame
-        chain = results["chain"].values if isinstance(results["chain"], pd.DataFrame) else results["chain"]
-        
-        # Plot traces
-        plt.figure(figsize=(12, 8))
-        for i, param in enumerate(param_names):
-            plt.subplot(len(param_names), 1, i+1)
-            plt.plot(chain[burnin:, i])
-            plt.ylabel(param)
-        plt.tight_layout()
-        plt.savefig(f"{output_dir}/traces_{timestamp}.png")
-        plt.close()
-        
-        # Plot posterior
-        plt.figure(figsize=(10, 6))
-        plt.plot(results["posterior"][burnin:])
-        plt.xlabel("Iterations")
-        plt.ylabel("Posterior")
-        plt.savefig(f"{output_dir}/posterior_{timestamp}.png")
-        plt.close()
-        
-        # Plot parameter distributions
-        n_params = len(param_names)
-        ncols = min(3, n_params)
-        nrows = (n_params + ncols - 1) // ncols
-        
-        plt.figure(figsize=(ncols*4, nrows*3))
-        for i, param in enumerate(param_names):
-            plt.subplot(nrows, ncols, i+1)
-            plt.hist(chain[burnin:, i], bins=30)
-            plt.xlabel(param)
-        plt.tight_layout()
-        plt.savefig(f"{output_dir}/distributions_{timestamp}.png")
-        plt.close()
-        
-        # Plot parameter correlations (if more than one parameter)
-        if n_params > 1:
-            plt.figure(figsize=(12, 12))
-            for i in range(n_params):
-                for j in range(n_params):
-                    if i != j:
-                        plt.subplot(n_params, n_params, i*n_params + j + 1)
-                        plt.plot(chain[burnin:, i], chain[burnin:, j], 'o', markersize=1)
-                        plt.xlabel(param_names[i])
-                        plt.ylabel(param_names[j])
-            plt.tight_layout()
-            plt.savefig(f"{output_dir}/correlations_{timestamp}.png")
-            plt.close()
-        
-        logging.info(f"Plots saved to {output_dir}")
+        import matplotlib.pyplot as plt
+
+        od = Path(output_dir or self.config["paths"]["plots_dir"])
+        od.mkdir(parents=True, exist_ok=True)
+
+        chain = results["chain"].values
+        names = list(results["chain"].columns)
+        burnin= results["burnin"]
+
+        # Trace plots
+        fig, axes = plt.subplots(len(names), 1, figsize=(8, 2*len(names)), sharex=True)
+        for i, n in enumerate(names):
+            axes[i].plot(chain[burnin:, i], lw=0.8)
+            axes[i].set_ylabel(n)
+        axes[-1].set_xlabel("Iteration")
+        fig.tight_layout()
+        fig.savefig(od / "trace_plots.png", dpi=300)
+        plt.close(fig)
+
+        # Posterior curve
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.plot(results["posterior"][burnin:])
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel("Posterior")
+        fig.tight_layout()
+        fig.savefig(od / "posterior_curve.png", dpi=300)
+        plt.close(fig)
+
+        # Distributions
+        n = len(names)
+        cols = min(3, n)
+        rows = (n + cols - 1) // cols
+        fig, axs = plt.subplots(rows, cols, figsize=(4*cols, 3*rows))
+        axs = axs.flat if hasattr(axs, "flat") else axs.flatten()
+        for i, param in enumerate(names):
+            axs[i].hist(chain[burnin:, i], bins=30)
+            axs[i].set_title(param)
+        fig.tight_layout()
+        fig.savefig(od / "distributions.png", dpi=300)
+        plt.close(fig)
+
+        # Pairwise correlations
+        if n > 1:
+            fig, axes = plt.subplots(n, n, figsize=(3*n, 3*n))
+            for i in range(n):
+                for j in range(n):
+                    axes[i, j].scatter(chain[burnin:, i], chain[burnin:, j], s=1)
+                    axes[i, j].set_xticks([])
+                    axes[i, j].set_yticks([])
+            fig.tight_layout()
+            fig.savefig(od / "correlations.png", dpi=300)
+            plt.close(fig)
+
+        LOGGER.info("Diagnostic plots saved to %s", od)
