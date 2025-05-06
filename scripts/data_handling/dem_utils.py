@@ -1,35 +1,24 @@
 """
-DEM (Digital Elevation Model) utilities for Tephra2.
-
-Provides functions to:
-- Download DEM data for a given geographical area
-- Extract elevation at specific coordinates
-
-Note: This module requires the 'victor' package to be installed
-for DEM downloads.
+Minimal DEM helpers for Tephra‑2
+--------------------------------
+Every call to `import victor` is guarded, so merely importing this module
+is safe even on systems where the Victor package is not installed.
 """
 
 from pathlib import Path
 import logging
-import os
-from typing import Tuple, Optional, Union
+import sys
+from typing import Union
 
-# Core imports for DEM processing
-import numpy as np
-import pandas as pd
-import rioxarray as rxr
-import utm
+import rioxarray as rxr  # pip install rioxarray
 
-# Visualization imports
-import matplotlib.pyplot as plt
-import matplotlib.tri as tri 
-import matplotlib.colors as mcolors
-import cartopy.crs as ccrs
-from cartopy.io.img_tiles import Stamen
-import seaborn as sns
-
-# Direct import of Victor for DEM downloads
-import victor
+# ----------------------------------------------------------------- Victor
+sys.path.insert(0, "/home/jovyan/shared/Libraries/")
+try:
+    import victor  # noqa: E402
+    VICTOR_AVAILABLE = True
+except ImportError:        # Victor not installed
+    VICTOR_AVAILABLE = False
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,89 +26,44 @@ LOGGER = logging.getLogger(__name__)
 def download_dem(
     lat_north: float,
     lat_south: float,
-    lon_west: float, 
+    lon_west: float,
     lon_east: float,
-    output_dir: Union[str, Path] = "data/input",
+    output_dir: str | Path = "data/input",
     filename: str = "tephra2.tiff",
-    dataset: str = "SRTMGL3",
-    format: str = "tiff"
+    dataset: str = "COP30",
+    file_format: str = "tiff",
+    overwrite: bool = False,
 ) -> Path:
     """
-    Download Digital Elevation Model (DEM) for the specified area.
-    
-    Note: Requires the 'victor' package to be installed.
-    
-    Args:
-        lat_north: Northern latitude boundary
-        lat_south: Southern latitude boundary  
-        lon_west: Western longitude boundary
-        lon_east: Eastern longitude boundary
-        output_dir: Directory to save the DEM file
-        filename: Output filename
-        dataset: DEM dataset to use (default: SRTMGL3 - 30m resolution SRTM)
-        format: Output format (default: tiff)
-        
-    Returns:
-        Path to the downloaded DEM file
-        
-    Raises:
-        ValueError: If coordinates are invalid
-        RuntimeError: If DEM download fails
+    Wrapper around `victor.download_dem`.  Raises a RuntimeError if
+    Victor is unavailable *and* someone attempts to call this function.
     """
-    
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    output_path = output_dir / filename
-    
-    # If file already exists, return its path
-    if output_path.exists():
-        LOGGER.info(f"Using existing DEM file: {output_path}")
-        return output_path
-    
-    LOGGER.info(f"Downloading DEM ({dataset}) for area: N={lat_north}, S={lat_south}, W={lon_west}, E={lon_east}")
-    
-    try:
-        # Download the DEM using victor
-        dem_file = victor.download_dem(
-            lat_north, lat_south,
-            lon_west, lon_east,
-            format, dataset, 
-            filename=str(output_path)
+    if not VICTOR_AVAILABLE:  # import is safe, call is not
+        raise RuntimeError(
+            "Victor package is not available – DEM download cannot proceed."
         )
-        
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            raise RuntimeError(f"DEM download appeared to succeed but file is missing or empty")
-            
-        LOGGER.info(f"DEM downloaded to: {output_path}")
-        return output_path
-        
-    except Exception as e:
-        LOGGER.error(f"DEM download failed: {e}")
-        # Re-raise with more context
-        raise RuntimeError(f"Failed to download DEM: {e}") from e
+
+    output_dir = Path(output_dir).expanduser()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / filename
+
+    if out_path.exists() and not overwrite:
+        LOGGER.info("Using cached DEM at %s", out_path)
+        return out_path
+
+    victor.download_dem(
+        lat_north,
+        lat_south,
+        lon_west,
+        lon_east,
+        file_format,
+        dataset,
+        filename=str(out_path),
+    )
+    return out_path
 
 
-def get_elevation_at_point(
-    dem_path: Union[str, Path],
-    latitude: float,
-    longitude: float
-) -> float:
-    """
-    Extract elevation at specific coordinates from a DEM file.
-    
-    Args:
-        dem_path: Path to the DEM file
-        latitude: Point latitude
-        longitude: Point longitude
-        
-    Returns:
-        Elevation in meters
-    """
-    try:
-        dem = rxr.open_rasterio(dem_path)
-        elevation = float(dem.sel(x=longitude, y=latitude, method="nearest").values[0])
-        return elevation
-    except Exception as e:
-        LOGGER.error(f"Error extracting elevation: {e}")
-        return 0.0 
+def get_elevation_at_point(dem_path: str | Path, lat: float, lon: float) -> float:
+    """Nearest‑neighbour elevation lookup (metres)."""
+    dem = rxr.open_rasterio(dem_path)
+    return float(dem.sel(x=lon, y=lat, method="nearest").values[0])
