@@ -2,135 +2,160 @@
 build_inputs.py
 ===============
 
-Create the full Tephra-2 input bundle (`tephra2.conf`, `esp_input.csv`,
-`wind.txt`) in one call, *always* producing:
+Creates a complete Tephra‑2 input bundle and three diagnostic plots:
+  1. UTM scatter of observations
+  2. Three‑panel wind profile with speed-colored scatter
+  3. Isomass contour map with DEM background
 
-1. Observation scatter (log-scale colour).
-2. Three-panel wind-profile figure.
-
-Existing files are reused unless `load_observations=False`
-or `load_wind=False`.
+Outputs land in data/input/  and  data/output/plots/.
 """
-
 from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
+import utm                                # only for UTM→lat/lon conversion
 
 from .coordinate_utils import latlon_to_utm
-from .esp_config import write_esp_input, write_tephra2_conf
-from .observation_data import ObservationHandler
-from .wind_data import WindDataHandler
+from .esp_config          import write_esp_input, write_tephra2_conf
+from .observation_data    import ObservationHandler
+from .wind_data           import WindDataHandler
+from .dem_utils           import download_dem, get_elevation_at_point
+from scripts.visualization.observation_plots import ObservationPlotter
+from scripts.visualization.wind_plots        import WindPlotter
 
 LOGGER = logging.getLogger(__name__)
 PLOTS_DIR = Path("data/output/plots")
-
-
-def _plot_wind(df: np.ndarray, save_path: Path, show: bool = True) -> None:
-    """Re-create the notebook’s 3-panel wind diagnostic."""
-    elev = df["HEIGHT"].to_numpy()
-    spd  = df["SPEED"].to_numpy()
-    dirc = df["DIRECTION"].to_numpy()
-
-    order = np.argsort(elev)
-    elev, spd, dirc = elev[order], spd[order], dirc[order]
-
-    sns.set_style("whitegrid")
-    fig = plt.figure(figsize=(15, 5))
-
-    # 1) Speed vs Altitude
-    ax1 = fig.add_subplot(1, 3, 1)
-    sns.lineplot(x=elev, y=spd, marker="o", linewidth=2, color="steelblue", ax=ax1)
-    ax1.set_xlabel("Altitude (m)")
-    ax1.set_ylabel("Wind speed (m/s)")
-    ax1.set_title("Wind speed vs altitude")
-
-    # 2) Direction vs Altitude
-    ax2 = fig.add_subplot(1, 3, 2)
-    sns.lineplot(x=elev, y=dirc, marker="o", linewidth=2, color="steelblue", ax=ax2)
-    ax2.set_xlabel("Altitude (m)")
-    ax2.set_ylabel("Wind direction (°)")
-    ax2.set_title("Wind direction vs altitude")
-
-    # 3) Polar plot
-    ax3 = fig.add_subplot(1, 3, 3, projection="polar")
-    ax3.plot(np.radians(dirc), elev, marker="o", color="steelblue")
-    ax3.set_theta_zero_location("N")
-    ax3.set_theta_direction(-1)
-    ax3.set_title("Polar (direction vs altitude)")
-
-    # Radial grid labels
-    max_alt = float(elev.max())
-    step = max_alt / 10 if max_alt else 1000
-    circles = np.arange(step, max_alt + step, step)
-    ax3.set_rgrids(circles, angle=60, labels=[f"{int(c)}" for c in circles])
-
-    fig.tight_layout()
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=300)
-    if show:
-        plt.show()
-    else:
-        plt.close(fig)
 
 
 def build_all(
     *,
     vent_lat: float,
     vent_lon: float,
-    vent_elev: float,
+    vent_elev: Optional[float] = None,
     base_dir: str | Path = "data/input",
     load_observations: bool = True,
     load_wind: bool = True,
+    download_dem_data: bool = True,
+    dem_buffer: float = 1.0,
+    dem_dataset: str = "SRTMGL3",
     obs_params: Optional[Dict] = None,
     wind_params: Optional[Dict] = None,
     show_plots: bool = True,
+    dem_path: Optional[str] = None,
 ) -> Tuple[Path, Path, Path]:
     """
-    Returns (tephra2_conf, esp_input_csv, wind_txt) after ensuring:
-    - observations.csv & sites.csv exist (or are synthesized)
-    - wind.txt exists (or is synthesized)
-    - diagnostic plots are saved/shown.
+    Return paths to (tephra2.conf, esp_input.csv, wind.txt).
+    
+    Args:
+        vent_lat: Vent latitude
+        vent_lon: Vent longitude
+        vent_elev: Vent elevation (optional - if None, will be extracted from DEM)
+        base_dir: Base directory for input/output files
+        load_observations: Whether to load existing observation data
+        load_wind: Whether to load existing wind data
+        download_dem_data: Whether to download DEM data for the area
+        dem_buffer: Buffer in degrees around vent for DEM download
+        dem_dataset: DEM dataset to use (default: SRTMGL3 - 30m resolution SRTM)
+        obs_params: Parameters for synthetic observation generation
+        wind_params: Parameters for synthetic wind generation
+        show_plots: Whether to display plots
+        dem_path: Custom path to DEM file
+        
+    Returns:
+        Paths to tephra2.conf, esp_input.csv, and wind.txt
     """
     base_dir = Path(base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Download DEM data if requested and extract vent elevation if not provided
+    if download_dem_data:
+        if dem_path is None:
+            dem_filename = "tephra2.tiff"
+            dem_path = str(download_dem(
+                vent_lat + dem_buffer, vent_lat - dem_buffer,
+                vent_lon - dem_buffer, vent_lon + dem_buffer,
+                output_dir=base_dir,
+                filename=dem_filename,
+                dataset=dem_dataset
+            ))
+            LOGGER.info(f"DEM downloaded to {dem_path}")
+        
+        # Extract vent elevation from DEM if not provided
+        if vent_elev is None:
+            vent_elev = get_elevation_at_point(dem_path, vent_lat, vent_lon)
+            LOGGER.info(f"Vent elevation extracted from DEM: {vent_elev:.2f} m")
 
-    # 1) Observations
-    obs_handler = ObservationHandler(base_dir)
+    # Ensure vent elevation is defined
+    if vent_elev is None:
+        LOGGER.warning("No vent elevation provided and DEM extraction disabled. Using 0 m.")
+        vent_elev = 0.0
+
+    obs_hdl = ObservationHandler(base_dir)
     if load_observations and (base_dir / "observations.csv").exists():
-        obs_vec, sites = obs_handler.load_observations()
+        obs_vec, sites = obs_hdl.load_observations()
     else:
-        obs_vec, sites = obs_handler.generate_synthetic(**(obs_params or {}))
-        obs_handler.save_observations(obs_vec, sites)
+        obs_vec, sites = obs_hdl.generate_synthetic(**(obs_params or {}))
+        obs_hdl.save_observations(obs_vec, sites)
 
-    if show_plots:
-        obs_handler.plot_observations(
-            obs_vec,
-            sites,
-            output_path=PLOTS_DIR / "observations.png",
-            show_plot=True,
-        )
+    # Vent UTM & lon/lat
+    vent_east, vent_north, _ = latlon_to_utm(vent_lat, vent_lon)
+    LOGGER.info(f"Vent location: ({vent_east:.2f}, {vent_north:.2f}), Elevation: {vent_elev:.2f} m")
 
-    # 2) Wind
-    wind_handler = WindDataHandler(base_dir)
+    # ----------------  PLOTTERS  -------------------------------------- #
+    obs_plot = ObservationPlotter(PLOTS_DIR)
+    
+    # Tephra distribution (UTM scatter)
+    obs_plot.plot_tephra_distribution(
+        eastings      = sites[:, 0],
+        northings     = sites[:, 1],
+        thicknesses   = obs_vec,
+        vent_location = (vent_east, vent_north),
+        title         = "Observed tephra distribution",
+        save_path     = PLOTS_DIR / "observations.png",
+        show_plot     = show_plots,
+    )
+
+    # Isomass map (lat/lon contours)
+    zone_num, zone_letter = utm.from_latlon(vent_lat, vent_lon)[2:]
+    lat_vals, lon_vals = utm.to_latlon(
+        sites[:, 0], sites[:, 1], zone_num, zone_letter
+    )
+    obs_plot.plot_isomass_map(
+        lon         = lon_vals, 
+        lat         = lat_vals, 
+        mass        = obs_vec,
+        vent_lon    = vent_lon, 
+        vent_lat    = vent_lat,
+        dem_path    = dem_path or str(base_dir / "tephra2.tiff"),
+        title       = "Tephra isomass contours",
+        save_path   = PLOTS_DIR / "isomass_map.png",
+        show_plot   = show_plots,
+    )
+
+    # ----------------  WIND  ----------------------------------------- #
+    wind_hdl = WindDataHandler(base_dir)
     if load_wind and (base_dir / "wind.txt").exists():
-        wind_df = wind_handler.load_wind_data()
+        wind_df = wind_hdl.load_wind_data()
     else:
-        wind_df = wind_handler.generate_wind_data(**(wind_params or {}))
-        wind_handler.save_wind_data(wind_df)
+        wind_df = wind_hdl.generate_wind_data(**(wind_params or {}))
+        wind_hdl.save_wind_data(wind_df)
 
-    if show_plots:
-        _plot_wind(wind_df, PLOTS_DIR / "wind_profile.png", show=True)
+    # Wind profile with speed-colored rose
+    wp = WindPlotter(PLOTS_DIR)
+    wp.plot_wind_profile(
+        heights     = wind_df["HEIGHT"].to_numpy(),
+        speeds      = wind_df["SPEED"].to_numpy(),
+        directions  = wind_df["DIRECTION"].to_numpy(),
+        title       = "Wind profile",
+        save_path   = PLOTS_DIR / "wind_profile.png",
+        show_plot   = show_plots,
+    )
 
-    # 3) Tephra2 config & ESP inputs
-    easting, northing, _ = latlon_to_utm(vent_lat, vent_lon)
-    conf_path = write_tephra2_conf(easting, northing, vent_elev)
-    esp_path  = write_esp_input(easting, northing, vent_elev)
+    # ----------------  CONF & ESP  ------------------------------------ #
+    conf_path = write_tephra2_conf(vent_east, vent_north, vent_elev)
+    esp_path  = write_esp_input(vent_east, vent_north, vent_elev)
 
-    LOGGER.info("Built inputs at %s", base_dir)
+    LOGGER.info("All inputs & plots written to %s", base_dir.resolve())
     return conf_path, esp_path, base_dir / "wind.txt"
