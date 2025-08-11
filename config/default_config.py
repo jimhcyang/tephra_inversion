@@ -51,7 +51,7 @@ DEFAULT_CONFIG = {
         "n_burnin": 0,
         "n_thin": 1,
         "proposal_scale": 0.5,
-        "seed": 20250814,
+        "seed": 20250812,
         "likelihood_sigma": 0.6,   # log-space residual sigma
         "silent": False,
         "snapshot": 100,
@@ -68,7 +68,7 @@ DEFAULT_CONFIG = {
         "T_end": 0.01,          # target terminal temperature (used when alpha=None)
         "restarts": 0,
         "likelihood_sigma": 0.6,
-        "seed": 20250814,
+        "seed": 20250812,
         "silent": False,
         "print_every": 100,
     },
@@ -79,7 +79,7 @@ DEFAULT_CONFIG = {
         "n_assimilations": 5,
         "inflation": 1.01,
         "likelihood_sigma": 0.6,
-        "seed": 20250814,
+        "seed": 20250812,
         "silent": False,
         "print_every": 1,
         "member_update_every": 100,

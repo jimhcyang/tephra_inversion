@@ -74,8 +74,8 @@ def scatter_2d_progress(
             df = _sample_rows(df, max_points_per_method, rng)
             ax.scatter(
                 df[xparam], df[yparam],
-                s=4, marker="o", linewidths=0,
-                alpha=0.04, c="tab:blue", edgecolors="none", label="MCMC"
+                s=9, marker="o", linewidths=0,
+                alpha=0.09, c="tab:blue", edgecolors="none", label="MCMC"
             )
 
     # ─────────── SA: every Nth point, line + diamonds (start=X, end=★) ───────────
@@ -91,7 +91,7 @@ def scatter_2d_progress(
             # line first (so points sit on top)
             ax.plot(
                 df_step[xparam].values, df_step[yparam].values,
-                linestyle="-", linewidth=1.2, alpha=0.65, color="tab:orange", label="SA", zorder=1
+                linestyle="-", linewidth=0.25, alpha=0.75, color="tab:orange", label="SA", zorder=1
             )
 
             # diamonds for intermediate nodes
@@ -99,27 +99,27 @@ def scatter_2d_progress(
                 inter = df_step.iloc[1:-1]
                 ax.scatter(
                     inter[xparam], inter[yparam],
-                    s=25, marker="D", linewidths=0,
-                    alpha=0.75, c="tab:orange", edgecolors="none", zorder=2
+                    s=25, marker="D", linewidths=0.25,
+                    alpha=0.25, c="tab:orange", edgecolors="none", zorder=2
                 )
 
             # first point: X
             start = df_step.iloc[0]
             ax.scatter(
                 [start[xparam]], [start[yparam]],
-                s=60, marker="X", linewidths=1.0,
-                alpha=0.9, c="tab:orange", zorder=3
+                s=25, marker="X", linewidths=0.0,
+                alpha=0.75, c="tab:orange", zorder=3
             )
 
             # last point: star
             end = df_step.iloc[-1]
             ax.scatter(
                 [end[xparam]], [end[yparam]],
-                s=90, marker="*", linewidths=0,
+                s=30, marker="*", linewidths=0,
                 alpha=0.95, c="tab:orange", edgecolors="none", zorder=4
             )
 
-    # ─────────── EnKF: group 0 only, squares, same size as SA ───────────
+    # ─────────── EnKF: group 0 only, subsample every sa_step, squares ───────────
     if (
         isinstance(enkf, dict)
         and isinstance(enkf.get("chain", None), pd.DataFrame)
@@ -127,14 +127,18 @@ def scatter_2d_progress(
     ):
         df = enkf["chain"].copy()
         df = _enkf_group0(df)
-        df = df[[xparam, yparam]].dropna()
+        # keep any time/iteration column so _sort_timewise can use it
+        time_cols = [c for c in ["iter", "iteration", "step", "time", "t"] if c in df.columns]
+        df = df[[xparam, yparam] + time_cols].dropna().copy()
         if len(df) > 0:
             df = _sort_timewise(df)
-            ax.scatter(
-                df[xparam], df[yparam],
-                s=12, marker="s", linewidths=0,
-                alpha=0.1, c="tab:green", edgecolors="none", label="EnKF (group 0)"
-            )
+            df_step = df.iloc[::max(1, int(sa_step))].reset_index(drop=True)
+            if len(df_step) > 0:
+                ax.scatter(
+                    df_step[xparam], df_step[yparam],
+                    s=16, marker="s", linewidths=0,
+                    alpha=0.16, c="tab:green", edgecolors="none", label="EnKF (group 0)"
+                )
 
     ax.set_xlabel("Plume Height (m)")
     ax.set_ylabel("Log Eruption Mass (ln kg)")
