@@ -20,25 +20,27 @@ URL = "https://gscommunitycodes.usf.edu/geoscicommunitycodes/public/inversion-sh
 ZIP_NAME = "tephra2-inversion3-victor.zip"
 CHUNK = 1024 * 1024  # 1 MB
 
-
 def repo_root_from_this_file() -> Path:
-    # script path: <repo_root>/scripts/download_cerro_negro.py
-    here = Path(__file__).resolve()
-    return here.parent.parent
-
+    """
+    This file lives at: <repo_root>/scripts/data_handling/download_cerro_negro.py
+    So the repo root is 2 levels up.
+    """
+    return Path(__file__).resolve().parents[2]
 
 def ensure_sys_path(root: Path) -> None:
-    """Ensure <repo_root> is on sys.path so 'import scripts.⋯' works when run as a file."""
+    """
+    Ensure <repo_root> is on sys.path so we can import:
+        from scripts.data_handling.cerro_negro_loader import prepare_cerro_negro
+    """
     root_str = str(root)
     if root_str not in sys.path:
         sys.path.insert(0, root_str)
-
 
 def download_to_file(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f"Downloading:\n  {url}\n→ {dest}")
     with urlopen(url) as r, open(dest, "wb") as f:
-        total = r.length or 0
+        total = getattr(r, "length", None) or 0
         downloaded = 0
         while True:
             chunk = r.read(CHUNK)
@@ -49,9 +51,9 @@ def download_to_file(url: str, dest: Path) -> None:
             if total:
                 pct = downloaded / total * 100
                 print(f"\r  {downloaded/1e6:.1f} / {total/1e6:.1f} MB ({pct:.1f}%)", end="")
-        print()
+        if total:
+            print()
     print("Download complete.")
-
 
 def unzip_to_dir(zip_path: Path, out_dir: Path) -> None:
     print(f"Unzipping:\n  {zip_path}\n→ {out_dir}")
@@ -59,25 +61,52 @@ def unzip_to_dir(zip_path: Path, out_dir: Path) -> None:
         zf.extractall(out_dir)
     print("Unzip complete.")
 
+def flatten_zip_payload(parent: Path) -> None:
+    """
+    Flatten archives that unpack to a single real folder (plus optional __MACOSX).
+    Moves the contents of that folder up into `parent` and removes the folder.
+    Repeats if there are nested single folders.
+    """
+    def visible_entries(p: Path):
+        return [x for x in p.iterdir() if not x.name.startswith(".") and x.name != "__MACOSX"]
 
-def maybe_flatten_single_subdir(parent: Path) -> None:
-    """
-    If the zip created a single subfolder (e.g., .../cerro_negro/<unzipped_name>/files),
-    move its contents up one level into parent and remove the subfolder.
-    """
-    entries = [p for p in parent.iterdir() if not p.name.startswith(".")]
-    if len(entries) == 1 and entries[0].is_dir():
-        sub = entries[0]
-        for item in sub.iterdir():
-            target = parent / item.name
-            if target.exists():
-                # overwrite to be robust
-                if target.is_dir():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
-            shutil.move(str(item), str(target))
-        shutil.rmtree(sub)
+    while True:
+        entries = visible_entries(parent)
+
+        # Case 1: exactly one directory → flatten it
+        if len(entries) == 1 and entries[0].is_dir():
+            sub = entries[0]
+            print(f"Flattening single folder: {sub.name} → {parent}")
+            for item in list(sub.iterdir()):
+                target = parent / item.name
+                if target.exists():
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                shutil.move(str(item), str(target))
+            sub.rmdir()
+            continue  # re-check in case of nested single folders
+
+        # Case 2: one real directory + __MACOSX → flatten the real one
+        entries_all = [x for x in parent.iterdir()]
+        real_dirs = [x for x in entries_all if x.is_dir() and x.name != "__MACOSX"]
+        others    = [x for x in entries_all if x.name == "__MACOSX" or x.name.startswith(".")]
+
+        if len(real_dirs) == 1 and not [e for e in entries_all if e not in real_dirs + others]:
+            sub = real_dirs[0]
+            print(f"Flattening folder (with __MACOSX present): {sub.name} → {parent}")
+            for item in list(sub.iterdir()):
+                target = parent / item.name
+                if target.exists():
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                shutil.move(str(item), str(target))
+            shutil.rmtree(sub)
+            continue
+        break
 
 
 def main(argv=None) -> int:
@@ -87,7 +116,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     root = repo_root_from_this_file()
-    ensure_sys_path(root)  # make 'scripts' importable
+    ensure_sys_path(root)  # make '<repo_root>' importable
 
     dest_dir = root / "data" / "input" / "cerro_negro"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -96,8 +125,7 @@ def main(argv=None) -> int:
     try:
         download_to_file(URL, zip_path)
         unzip_to_dir(zip_path, dest_dir)
-        # flatten possible nested folder from the zip
-        maybe_flatten_single_subdir(dest_dir)
+        flatten_zip_payload(dest_dir)
 
         # remove zip to keep tree tidy
         try:
@@ -107,8 +135,18 @@ def main(argv=None) -> int:
             print(f"[WARN] Could not remove zip: {e}")
 
         if args.prepare:
-            # now import and run the standardizer
-            from scripts.data_handling.cerro_negro_loader import prepare_cerro_negro
+            # Import with the correct package path based on your structure
+            try:
+                from scripts.data_handling.cerro_negro_loader import prepare_cerro_negro
+            except Exception as e:
+                print(
+                    "[ERROR] Could not import 'prepare_cerro_negro' from scripts.data_handling.cerro_negro_loader.\n"
+                    f"  Details: {e}\n"
+                    "  Tip: run from repo root:\n"
+                    "       python -m scripts.data_handling.download_cerro_negro --prepare"
+                )
+                return 1
+
             obs_csv, sites_csv, wind_txt, conf_path = prepare_cerro_negro(
                 cerro_dir=dest_dir,
                 work_dir=root / "data" / "input",
@@ -121,6 +159,7 @@ def main(argv=None) -> int:
 
         print("\nDone.")
         return 0
+
     except Exception as e:
         print(f"\nERROR: {e}", file=sys.stderr)
         return 1

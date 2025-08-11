@@ -7,7 +7,7 @@ import seaborn as sns
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Union
 import matplotlib.gridspec as gridspec
-from scripts.data_handling.esp_config import load_config
+from scripts.data_handling.config_io import load_config
 
 class DiagnosticPlotter:
     def __init__(self, output_dir: str = "data/output/plots"):

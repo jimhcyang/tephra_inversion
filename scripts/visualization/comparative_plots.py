@@ -19,6 +19,23 @@ def _sample_rows(df: pd.DataFrame, k: int, rng: np.random.Generator) -> pd.DataF
     idx = rng.choice(len(df), size=k, replace=False)
     return df.iloc[idx].reset_index(drop=True)
 
+def _sort_timewise(df: pd.DataFrame) -> pd.DataFrame:
+    # Try to respect any explicit iteration/time columns if present
+    for col in ["iter", "iteration", "step", "time", "t"]:
+        if col in df.columns:
+            return df.sort_values(col, kind="mergesort").reset_index(drop=True)
+    return df.reset_index(drop=True)
+
+def _enkf_group0(df: pd.DataFrame) -> pd.DataFrame:
+    # Prefer common group/member columns; fall back to unfiltered if none exist
+    for col in ["group", "ensemble", "ens", "member", "grp", "gid"]:
+        if col in df.columns:
+            try:
+                return df[df[col] == 0].reset_index(drop=True)
+            except Exception:
+                pass
+    return df.reset_index(drop=True)
+
 def scatter_2d_progress(
     mcmc: Optional[dict],
     sa: Optional[dict],
@@ -29,38 +46,95 @@ def scatter_2d_progress(
     save_path: str | Path = "data/output/plots/method_trajectories.png",
     show: bool = True,
     *,
-    max_points_per_method: int = 256,
-    base_alpha: float = 0.01,
-    seed: int = 1234,
+    max_points_per_method: int = 10000,  # used for MCMC only
+    sa_step: int = 10,                 # plot every Nth SA point, connected
+    seed: int = 20250812,
 ) -> str:
     """
-    Overlay 2D clouds for MCMC, SA, and EnKF in (xparam, yparam) space.
-    - No connecting lines (less clutter).
-    - Very low alpha by default.
-    - Randomly subsample up to `max_points_per_method` points per method.
+    Overlay 2D trajectories/clouds for MCMC, SA, and EnKF:
+      • MCMC: very tiny, super low-opacity circles (randomly subsampled).
+      • SA:   every `sa_step` points, connected with lines; higher opacity; diamonds.
+      • EnKF: only the 0-th group; squares, same size as SA, low opacity.
+
+    Returns the saved image path.
     """
     save_path = Path(save_path); save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.figure(figsize=(8, 7))
     ax = plt.gca()
     rng = np.random.default_rng(seed)
 
-    def _plot_cloud(df: pd.DataFrame, color: str, label: str):
+    # ─────────── MCMC: tiny, super faint circles ───────────
+    if (
+        isinstance(mcmc, dict)
+        and isinstance(mcmc.get("chain", None), pd.DataFrame)
+        and {xparam, yparam}.issubset(mcmc["chain"].columns)
+    ):
+        df = mcmc["chain"][[xparam, yparam]].dropna().copy()
+        if len(df) > 0:
+            df = _sample_rows(df, max_points_per_method, rng)
+            ax.scatter(
+                df[xparam], df[yparam],
+                s=4, marker="o", linewidths=0,
+                alpha=0.04, c="tab:blue", edgecolors="none", label="MCMC"
+            )
+
+    # ─────────── SA: every Nth point, line + diamonds (start=X, end=★) ───────────
+    if (
+        isinstance(sa, dict)
+        and isinstance(sa.get("chain", None), pd.DataFrame)
+        and {xparam, yparam}.issubset(sa["chain"].columns)
+    ):
+        df = sa["chain"][[xparam, yparam] + [c for c in ["iter","iteration","step","time","t"] if c in sa["chain"].columns]].dropna().copy()
+        df = _sort_timewise(df)
+        df_step = df.iloc[::max(1, int(sa_step))].reset_index(drop=True)
+        if len(df_step) > 0:
+            # line first (so points sit on top)
+            ax.plot(
+                df_step[xparam].values, df_step[yparam].values,
+                linestyle="-", linewidth=1.2, alpha=0.65, color="tab:orange", label="SA", zorder=1
+            )
+
+            # diamonds for intermediate nodes
+            if len(df_step) > 2:
+                inter = df_step.iloc[1:-1]
+                ax.scatter(
+                    inter[xparam], inter[yparam],
+                    s=25, marker="D", linewidths=0,
+                    alpha=0.75, c="tab:orange", edgecolors="none", zorder=2
+                )
+
+            # first point: X
+            start = df_step.iloc[0]
+            ax.scatter(
+                [start[xparam]], [start[yparam]],
+                s=60, marker="X", linewidths=1.0,
+                alpha=0.9, c="tab:orange", zorder=3
+            )
+
+            # last point: star
+            end = df_step.iloc[-1]
+            ax.scatter(
+                [end[xparam]], [end[yparam]],
+                s=90, marker="*", linewidths=0,
+                alpha=0.95, c="tab:orange", edgecolors="none", zorder=4
+            )
+
+    # ─────────── EnKF: group 0 only, squares, same size as SA ───────────
+    if (
+        isinstance(enkf, dict)
+        and isinstance(enkf.get("chain", None), pd.DataFrame)
+        and {xparam, yparam}.issubset(enkf["chain"].columns)
+    ):
+        df = enkf["chain"].copy()
+        df = _enkf_group0(df)
         df = df[[xparam, yparam]].dropna()
-        df = _sample_rows(df, max_points_per_method, rng)
-        idx = np.arange(len(df))
-        w = _norm_range(idx)
-        alpha = np.clip(base_alpha + 0.6 * w, 0.0, 1.0)
-        ax.scatter(df[xparam], df[yparam], s=18, c=color, alpha=np.clip(alpha, 0.01, 0.35),
-                   edgecolors="none", label=label)
-
-    if mcmc and xparam in mcmc["chain"].columns and yparam in mcmc["chain"].columns:
-        _plot_cloud(mcmc["chain"].copy(), "tab:blue", "MCMC")
-
-    if sa and xparam in sa["chain"].columns and yparam in sa["chain"].columns:
-        _plot_cloud(sa["chain"].copy(), "tab:orange", "SA")
-
-    if enkf and xparam in enkf["chain"].columns and yparam in enkf["chain"].columns:
-        _plot_cloud(enkf["chain"].copy(), "tab:green", "EnKF")
+        if len(df) > 0:
+            df = _sort_timewise(df)
+            ax.scatter(
+                df[xparam], df[yparam],
+                s=12, marker="s", linewidths=0,
+                alpha=0.1, c="tab:green", edgecolors="none", label="EnKF (group 0)"
+            )
 
     ax.set_xlabel("Plume Height (m)")
     ax.set_ylabel("Log Eruption Mass (ln kg)")
@@ -69,6 +143,8 @@ def scatter_2d_progress(
     ax.legend(loc="best")
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    if show: plt.show()
-    else: plt.close()
+    if show:
+        plt.show()
+    else:
+        plt.close()
     return str(save_path)

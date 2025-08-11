@@ -75,7 +75,7 @@ DEFAULT_CONFIG = {
 
     # EnKF/ES‑MDA: small ensemble over 5 passes; gentle inflation; surfaced robustness knobs.
     "enkf": {
-        "n_ens": 5000,
+        "n_ens": 10000,
         "n_assimilations": 5,
         "inflation": 1.01,
         "likelihood_sigma": 0.6,

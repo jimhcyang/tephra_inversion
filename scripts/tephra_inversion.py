@@ -10,7 +10,7 @@ import pandas as pd
 from scripts.core.mcmc import metropolis_hastings
 from scripts.core.sa import simulated_annealing
 from scripts.core.enkf import ensemble_smoother_mda
-from scripts.config_io import load_config
+from scripts.data_handling.config_io import load_config
 
 
 logging.basicConfig(

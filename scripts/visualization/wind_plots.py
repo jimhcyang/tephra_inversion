@@ -1,8 +1,8 @@
 """
-Wind‑profile visualisation.
+Wind-profile visualisation.
 
-• plot_wind_profile : three‑panel figure
-    (speed–altitude, direction–altitude, polar scatter coloured by speed).
+• plot_wind_profile : three-panel figure
+    (speed-altitude, direction-altitude, polar scatter coloured by speed).
 
 Both PNGs land in the output directory you pass (default: data/output/plots).
 """
@@ -23,7 +23,7 @@ class WindPlotter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
-    #  THREE‑IN‑ONE PROFILE                                              #
+    #  THREE-IN-ONE PROFILE                                              #
     # ------------------------------------------------------------------ #
     def plot_wind_profile(
         self,
@@ -78,7 +78,7 @@ class WindPlotter:
         ax3.set_theta_direction(-1)
         ax3.set_title("Polar scatter (dir vs alt, colored by speed)")
 
-        # 10 concentric circles – but label only mid-radius and max
+        # 10 concentric circles - but label only mid-radius and max
         max_r = float(h.max())
         circles = np.linspace(max_r / 10, max_r, 10)
         mid_r = circles[4]
@@ -106,7 +106,7 @@ class WindPlotter:
         return str(save_path)
     
 # ---------------------------------------------------------------------- #
-#  Helper – make subplot square (mpl < 3.4 fallback)                     #
+#  Helper - make subplot square (mpl < 3.4 fallback)                     #
 # ---------------------------------------------------------------------- #
 def _square_axes(ax: mpl.axes.Axes) -> None:
     """Force a square drawing box without distorting data."""
