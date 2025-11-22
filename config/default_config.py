@@ -60,11 +60,10 @@ DEFAULT_CONFIG = {
     },
 
     # SA comparable to MCMC but with adaptive cooling available by default.
-    # If alpha is None, the code chooses alpha so T decays from T0 -> T_end across 'runs'.
     "sa": {
         "runs": 5000,           # ~match MCMC iterations
         "T0": 1.0,              # initial temperature
-        "alpha": 0.999,          # ADAPTIVE: let code compute from T0 -> T_end
+        "alpha": 0.999,         # if None, code computes from T0 -> T_end
         "T_end": 0.01,          # target terminal temperature (used when alpha=None)
         "restarts": 0,
         "likelihood_sigma": 0.6,
@@ -73,8 +72,21 @@ DEFAULT_CONFIG = {
         "print_every": 100,
     },
 
-    # EnKF/ES‑MDA: small ensemble over 5 passes; gentle inflation; surfaced robustness knobs.
-    "enkf": {
+    # PSO: particle swarm optimization (MAP-style search, like SA)
+    "pso": {
+        "runs": 2000,              # iterations per restart
+        "restarts": 0,             # independent swarms
+        "likelihood_sigma": 0.6,   # same noise model as MCMC/SA
+        "T0": 1.0,                 # unused but accepted (for API parity)
+        "alpha": None,             # unused but accepted
+        "T_end": 0.2,              # unused but accepted
+        "seed": 20250812,
+        "silent": False,
+        "print_every": 100,        # how often to print progress
+    },
+
+    # ES-MDA
+    "es": {
         "n_ens": 10000,
         "n_assimilations": 5,
         "inflation": 1.01,
@@ -83,7 +95,7 @@ DEFAULT_CONFIG = {
         "silent": False,
         "print_every": 1,
         "member_update_every": 100,
-        # exposed stability/exploration options (defaults match enkf.py)
+        # stability/exploration options
         "obs_logspace": True,
         "sd_scale": 1.0,
         "jitter_after_pass": 0.0,

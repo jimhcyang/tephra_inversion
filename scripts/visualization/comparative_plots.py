@@ -40,6 +40,7 @@ def scatter_2d_progress(
     mcmc: Optional[dict],
     sa: Optional[dict],
     enkf: Optional[dict],
+    pso: Optional[dict] = None,
     xparam: str = "plume_height",
     yparam: str = "log_mass",
     title: str = "Inversion trajectories",
@@ -47,13 +48,14 @@ def scatter_2d_progress(
     show: bool = True,
     *,
     max_points_per_method: int = 10000,  # used for MCMC only
-    sa_step: int = 10,                 # plot every Nth SA point, connected
+    sa_step: int = 10,                   # plot every Nth SA/PSO point, connected
     seed: int = 20250812,
 ) -> str:
     """
-    Overlay 2D trajectories/clouds for MCMC, SA, and EnKF:
+    Overlay 2D trajectories/clouds for MCMC, SA, EnKF, and PSO:
       • MCMC: very tiny, super low-opacity circles (randomly subsampled).
       • SA:   every `sa_step` points, connected with lines; higher opacity; diamonds.
+      • PSO:  every `sa_step` points (timeline of gbest), line + pentagons in purple.
       • EnKF: only the 0-th group; squares, same size as SA, low opacity.
 
     Returns the saved image path.
@@ -117,6 +119,47 @@ def scatter_2d_progress(
                 [end[xparam]], [end[yparam]],
                 s=30, marker="*", linewidths=0,
                 alpha=0.95, c="tab:orange", edgecolors="none", zorder=4
+            )
+
+    # ─────────── PSO: every Nth point, line + pentagons (start=X, end=★) ───────────
+    if (
+        isinstance(pso, dict)
+        and isinstance(pso.get("chain", None), pd.DataFrame)
+        and {xparam, yparam}.issubset(pso["chain"].columns)
+    ):
+        df = pso["chain"][[xparam, yparam] + [c for c in ["iter","iteration","step","time","t"] if c in pso["chain"].columns]].dropna().copy()
+        df = _sort_timewise(df)
+        df_step = df.iloc[::max(1, int(sa_step))].reset_index(drop=True)
+        if len(df_step) > 0:
+            # line first
+            ax.plot(
+                df_step[xparam].values, df_step[yparam].values,
+                linestyle="-", linewidth=0.25, alpha=0.75, color="tab:purple", label="PSO", zorder=1
+            )
+
+            # intermediates: pentagons
+            if len(df_step) > 2:
+                inter = df_step.iloc[1:-1]
+                ax.scatter(
+                    inter[xparam], inter[yparam],
+                    s=22, marker="p", linewidths=0.25,
+                    alpha=0.28, c="tab:purple", edgecolors="none", zorder=2
+                )
+
+            # first point: X
+            start = df_step.iloc[0]
+            ax.scatter(
+                [start[xparam]], [start[yparam]],
+                s=25, marker="X", linewidths=0.0,
+                alpha=0.80, c="tab:purple", zorder=3
+            )
+
+            # last point: star
+            end = df_step.iloc[-1]
+            ax.scatter(
+                [end[xparam]], [end[yparam]],
+                s=30, marker="*", linewidths=0,
+                alpha=0.95, c="tab:purple", edgecolors="none", zorder=4
             )
 
     # ─────────── EnKF: group 0 only, subsample every sa_step, squares ───────────

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# scripts/core/enkf.py  · ES‑MDA in log‑space with robust numerics
+# scripts/core/es.py  · ES‑MDA in log‑space with robust numerics
 # unified plain-text progress (MCMC-style)
 # ─────────────────────────────────────────────────────────────
 from __future__ import annotations
@@ -181,7 +181,7 @@ def ensemble_smoother_mda(
 
             def _progress(i: int):
                 if prog_used and (i % member_update_every == 0 or i == n_total):
-                    sys.stdout.write(f"\r[ENKF] pass {k}/{n_assimilations}  iter {i}/{n_total}")
+                    sys.stdout.write(f"\r[ES] pass {k}/{n_assimilations}  iter {i}/{n_total}")
                     sys.stdout.flush()
 
             # forward model in log space
@@ -199,7 +199,7 @@ def ensemble_smoother_mda(
             if valid.sum() < max(3, p + 1):
                 if not silent:
                     sys.stdout.write(
-                        f"[ENKF] pass {k}/{n_assimilations}  stopped early (valid={int(valid.sum())})\n"
+                        f"[ES] pass {k}/{n_assimilations}  stopped early (valid={int(valid.sum())})\n"
                     )
                 break
 
@@ -254,7 +254,7 @@ def ensemble_smoother_mda(
                 h_mean = float(np.nanmean(X[valid, 0])) if p >= 1 else float("nan")
                 lnM_mean = float(np.nanmean(X[valid, 1])) if p >= 2 else float("nan")
                 sys.stdout.write(
-                    f"[ENKF] pass {k}/{n_assimilations}  valid={int(valid.sum())}  "
+                    f"[ES] pass {k}/{n_assimilations}  valid={int(valid.sum())}  "
                     f"h_mean={h_mean:,.1f}  lnM_mean={lnM_mean:.3f}\n"
                 )
 

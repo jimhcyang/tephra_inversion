@@ -23,6 +23,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Downloaded Files
+cerro_negro_detail_data/
+
 # Virtual Environment
 .venv/
 
@@ -51,3 +54,5 @@ data/input/observations/*.csv
 # Logs
 *.log
 logs/
+plume2.dat
+node_

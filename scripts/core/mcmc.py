@@ -91,8 +91,13 @@ def log_prior(plume, prior_type, prior_para) -> float:
         width = np.clip(hi - lo, 1e-12, None)
         logp[mask_u] = np.log(np.clip(uniform.pdf(plume[mask_u], lo, width), 1e-300, None))
 
-    return float(logp.sum())
+    mask_f = prior_type == "Fixed"
+    if mask_f.any():
+        vals = prior_para[mask_f, 0]
+        if np.any(np.abs(plume[mask_f] - vals) > 1e-12):
+            return -np.inf
 
+    return float(logp.sum())
 
 def log_likelihood(pred, obs, sigma) -> float:
     """Gaussian likelihood in natural log space."""
@@ -129,10 +134,9 @@ def metropolis_hastings(
     like_arr[0], prior_arr[0] = like0, prior0
 
     accept = 0
-    iterator = _itr(runs, "MCMC")
 
     # ── MH loop ───────────────────────────────────────────────
-    for i in iterator:
+    for i in range(1, runs + 1):
         proposal = draw_plume(chain[i-1], prior_type, draw_scale, prior_para)
 
         pred_p  = run_tephra2(proposal, conf_path, sites_csv, tephra2_path, wind_path, silent=True)
@@ -150,10 +154,12 @@ def metropolis_hastings(
             post[i]  = post[i-1]
             prior_arr[i], like_arr[i] = prior_arr[i-1], like_arr[i-1]
 
-        if not silent and (i % max(int(snapshot),1) == 0):
+        if (not silent) and (i % max(int(snapshot), 1) == 0):
             # plain text progress line
-            sys.stdout.write(f"\r[MCMC] iter {i}/{runs}  acc={accept/i:.3f}  "
-                             f"h={chain[i,0]:.1f}  lnM={chain[i,1]:.3f}")
+            sys.stdout.write(
+                f"\r[MCMC] iter {i}/{runs}  acc={accept/i:.3f}  "
+                f"h={chain[i,0]:.1f}  lnM={chain[i,1]:.3f}"
+            )
             sys.stdout.flush()
 
     if not silent:

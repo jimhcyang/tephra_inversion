@@ -1,0 +1,184 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+<meta name="description" content="Inverting tephra fallout deposit data">
+<meta name="author" content="Charles Connor" >
+<meta name="keywords" content="geology, geophysics, volcanology, C, inversion, volcanology, tephra2, inversion, eruption mass, eruption source parameter">
+<title>Geocomputation</title>
+
+<!-- Bootstrap CSS -->
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
+
+<link rel='stylesheet' href=https://gscommunitycodes.usf.edu/geoscicommunitycodes/css/gscc.css><script src=https://gscommunitycodes.usf.edu/geoscicommunitycodes/scripts/mathjax-config.js async></script></head>
+<?php echo "<link rel='stylesheet' href=https://" . $_SERVER['HTTP_HOST'] . "/geoscicommunitycodes/css/gscc.css>"; ?>
+
+    
+</head>
+<body id="top">
+<div id="page-container">
+<div id="content-wrap">
+<div id="navbar"></div>
+
+<div class="jumbotron" id="gcc" class="jumbotron-fluid">
+<div class="container pt-3 pb-3" >
+<h1 class="display-4">Inverting tephra fallout deposit data</h1>
+
+<h6>Learn about modifying Tephra2 to estimate many eruption source parameters for the 1992 Cerro Negro (Nicaragua) eruption using simulated annealing</h6>
+
+</div>
+</div>
+
+<div class="container pt-4 pb-2" >
+<h4 class="text-secondary">Contents</h3>
+<ul>
+
+<li><a href="#structure">structure of the inversion problem</a></li>
+<li><a href="#anneal">The simulated annealing method</a></li>
+<li><a href="#code">The C code</a></li>
+<li><a href="#try">Things to try</a></li>
+</ul>
+</div>
+
+<div class="container">
+<h3 class="text-dark">Introduction</h3>
+<p>
+Now we modify the inversion code to include four parameters that are estimated simultaneously: total eruption mass, maximum eruption column height, "alpha", and median grainsize of the deposit. This analysis still uses simulated annealing, but is now a multi-parameter estimation problem. In addition, this analysis pays more attention to parameter uncertainty. This is achieved by running the inversion many times, say 100 times, and finding the range of parameters that result in solutions with reasonable small root-mean-square-error (RMSE). </p>
+</div>
+
+
+<div id = "anneal" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+
+<h3 class="text-dark">The Simulated Annealing Search to Estimate Four Parameters</h3>
+<p>The same overall code struture is maintained in this example. Primarily, the simulated annealing function is modified to include search for four parameters: total eruption mass, maximum eruption column height, "alpha", and median grainsize of the deposit. Any one inversion produces a set of these four parameters and an RMSE value. Because simulated annealing uses a random number generator to select neighbor solutions, the </p>
+
+
+<img src="./images/tephra2_sim3_flowchart2.png" alt="sim flowchart" style="width: 100%; max-width: 750px;" />
+
+<p>The key steps are the same as before, just with an additional parameter to be estimated:
+<ul>
+
+<li>Initialize the Bounds: Set an initial range for possible eruption mass: $m_{min} = 1 \times 10^{10}$ kg m$^{-2}$  and $m_{max} =  1 \times 10^{11}$ kg m$^{-2}$ . Alpha is going to vary between 2 and 5, with "beta" fixed to 2 in the configuration file. Choose a "current total eruption mass" and "current alpha" within these bounds. These choices might be arbitary or might be based on what the solution is expected to be. </li>
+<li>Specify the initial and final temperature of the calculation, the cooling rate, and the maximum number of iterations allowed. These parameters control the search for the best-fit total eruption mass and alpha values.
+</li>
+<li>Iterative Optimization:
+<ul>
+<li>Step 1: Choose a neighboring total eruption mass parameter, adjacent to the "current total eruption mass". The neighbor eruption mass is:
+$$m_n = m_c + \left [ \frac{\textrm{rand()}}{\textrm{RAND_MAX}} - 0.5\right ] \times (m_{max} - m_{min}) \times 0.1$$
+The neighbor alpha is found in exactly the same way:
+$$a_n = a_c + \left [ \frac{\textrm{rand()}}{\textrm{RAND_MAX}} - 0.5\right ] \times (a_{max} - a_{min}) \times 0.1$$
+These equations ensure that the neighbor parameters are within $\pm 5$ percent of the total parameter range. But a checks are made to make sure $m_{min} < m_n < m_{max}$ and $a_{min} < a_n < a_{max}$.
+
+<li>Step 2: Compute the new tephra fallout mass loading at each obsrvation point with the $m_n$ and $a_n$ values and update the RSME
+<li> Step 3: Both $m_n$ and $a_n$ become the current parameter values if either the new RSME is lower or the RMSE is worse based on the Metropolis criterion:
+$$\exp(-\Delta \textrm{RSME}/T) > \frac{\textrm{rand()}}{\textrm{RAND_MAX}}  $$
+which means that nearby <i>worse</i> depth estimates are accepted (temporarily) with some probability that depends on the temperature ($T$). This approach helps the SA algorithm escape from local minima in the RMSE function (for example because the data are noisy).
+<li> If the current total eruption mass $m_c$ and alpha are updated, then the temperature ($T$) is reduced by a factor of $\alpha_T$:
+$$T = \alpha_T T $$
+Usually $\alpha_T = 0.9$ to gradually decrease the temperature. So, the value of $T$ changes throughout the search. Early on in the search, $T$ is large, so "bad" moves are accepted leading to exploration of the entire range of possible eruption mass and alpha values. As the search continues, $T$ becomes smaller and the search focuses only on better moves (lower RMSE values).
+<li>Return the Optimal total eruption mass and optimal alpha when the $T_{final}$ value is reached.
+</ul>
+</p>
+
+</div>
+
+<div id = "code" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+<h3 class="text-dark">The <i>C</i> code</h3>
+<p>You need a bunch of files to compile and run this code. These files are contained in a compressed file called <a href = "./tephra2-inversion2-victor.zip">tephra2-inversion2-victor.zip</a>.
+  
+</p>
+
+<p>Download this compressed file and unzip. To compile the code, on the command line type: make</p>
+
+<p>To run the code type: ./tephra2_2025 tephra2.conf cerro_negro_92.dat wind1 > cn_out.dat</p>
+
+<p> If all goes well, the first lines of your output file should look like:</p>
+<div class="container bg-light">
+
+<pre class="pre-scrollable">
+<code class="text-success">
+Optimized mass: 30718717835.014091
+Optimized alpha: 4.096587
+Best RMSE: 232.923827
+526774 1381087 100 509.00 554.681 
+526028 1380972 100 256.00 435.878 
+525477 1380291 100 476.00 317.361 
+524516 1379866 100 249.00 229.531 
+523595 1379462 100 244.94 173.98 
+522674 1379481 100 227.00 156.622 
+521642 1379304 100 171.60 130.694 
+
+</code>
+</pre>
+</div>
+
+<figure class="half" style="display:flex">
+    <img style="width:400px" src="./images/mass_histo.png" alt="mass histogram">
+    <img style="width:400px" src="./images/max_plume_histo.png" alt="max plume histogram">
+    <figcaption>Eruption mass histogram (left) and maximum plume height histogram (right). Note that 42 simulations produce poor results and give unnaturally low parameter values (the bars on the right-hand-side of the histograms). The remaining simulations yield reasonable ranges for total eruption mass and maximum eruption column height. Both parameter estimates show some central tendency. </figcaption>
+</figure>
+
+
+
+<figure class="half" style="display:flex">
+    <img style="width:400px" src="./images/median_phi_histo.png" alt="median phi histogram">
+    <img style="width:400px" src="./images/alpha.png" alt="alpha histogram">
+    <figcaption>Median of the total eruption grainsize distribution (left) and alpha (right). Note that 42 simulations produce poor results and give unnaturally low parameter values (the bars on the right-hand-side of the histograms). The remaining simulations yield reasonable ranges for these ESPs. The median grainsize has central tendency to about +0.25 phi. Alpha does not show such central tendency: almost any value between about 3.3 and 4.2 seems reasonable. </figcaption>
+</figure>
+
+
+<figure class="half" style="display:flex">
+    <img style="width:400px" src="./images/mass_plume_height.png" alt="mass vs plume height">
+    <img style="width:400px" src="./images/mass_gainsize.png" alt="mass vs. grainsize">
+    <figcaption>It is also important to search for correlation among the estimated eruption source parameters. In this case, there is no correlation between eruption mass and maximum plume height. There is a clear correlation between eruption mass and median grainsize. As the eruption mass becomes larger, median grainsize tends toward finer grainsize (larger positive phi values).) </figcaption>
+</figure>
+
+
+<figure class="half" style="display:flex">
+    <img style="width:400px" src="./images/colht_gainsize.png" alt="plume height vs grainsize">
+    <img style="width:400px" src="./images/alpha_gainsize.png" alt="alpha vs grainsize">
+    <figcaption>Likewise, a slight negative correlation is observed between maximum eruption column height and median grainsize. As the eruption column height parameter increases, the best-fit median grainsize becomes coarser. This makes sense, as coarser particles fall at greater speed from higher in the column. There is no observed correlation between grainsize and alpha, the eruption column shape parameter. </figcaption>
+</figure>
+
+
+<hr>
+</div>
+
+<div id = "try" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+
+<h3 class="text-dark">Things to Try</h3>
+
+<ul>
+<li>Make sure you can download, compile and run the code. Plot up the output to compare the observed and calculated tephra fallout deposits.</li>
+<li>Try modifying the inversion by changing the eruption source parameters in the configuration file. How does the estimated eruption mass and alpha change? In particular, try entering a very high eruption column (like 12500 m) and see what happens to the best estimate of alpha. Does this answer make sense? This is an example of parameter compensation. If you change the range of one parameter, another parameter value can change to compensate and result is a similar goodness-of-fit.</li>
+<li>In the current version of the code, the maximum and minimum total eruption mass parameters are specified in main(). Try modifying the code so these parameters are read from a configuration file. Hint: see the C shortcourse for an example of reading a configuration file: <a href="https://gscommunitycodes.usf.edu/geoscicommunitycodes/public/c-shortcourse/c-first-examples/data4_c.php">data4.c</a></li>
+</ul>
+<hr>
+</div>
+
+<div id="footer"></div>
+
+<!-- Bootstrap core JavaScript
+================================================== -->
+<!-- Placed at the end of the document so the pages load faster -->
+<!-- JS, Popper.js, and jQuery -->
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js" integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/p5@1.0.0/lib/p5.js"></script>
+<script src="sphere/p5/canvas_gravity_sphere.js"></script>
+<script src=https://gscommunitycodes.usf.edu/geoscicommunitycodes/scripts/gravity_scripts.js></script></body>
+<?php echo "<script src=https://" . $_SERVER['HTTP_HOST'] . "/geoscicommunitycodes/scripts/shortcourse_scripts.js></script>"; ?>
+</div>
+</div>
+</div>
+</body>
+</html>

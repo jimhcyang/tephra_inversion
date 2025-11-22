@@ -1,0 +1,212 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+<meta name="description" content="Inverting tephra fallout deposit data">
+<meta name="author" content="Charles Connor" >
+<meta name="keywords" content="geology, geophysics, volcanology, C, inversion, volcanology, tephra2, inversion, eruption mass, eruption source parameter">
+<title>Geocomputation</title>
+
+<!-- Bootstrap CSS -->
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css" integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
+
+<link rel='stylesheet' href=https://gscommunitycodes.usf.edu/geoscicommunitycodes/css/gscc.css><script src=https://gscommunitycodes.usf.edu/geoscicommunitycodes/scripts/mathjax-config.js async></script></head>
+<?php echo "<link rel='stylesheet' href=https://" . $_SERVER['HTTP_HOST'] . "/geoscicommunitycodes/css/gscc.css>"; ?>
+
+</head>
+<body id="top">
+<div id="page-container">
+<div id="content-wrap">
+<div id="navbar"></div>
+
+<div class="jumbotron" id="gcc" class="jumbotron-fluid">
+<div class="container pt-3 pb-3" >
+<h1 class="display-4">Inverting tephra fallout deposit data</h1>
+
+<h6>Learn about modifying Tephra2 to determine eruption mass for the 1992 Cerro Negro (Nicaragua) eruption using simulated annealing</h6>
+
+</div>
+</div>
+
+<div class="container pt-4 pb-2" >
+<h4 class="text-secondary">Contents</h3>
+<ul>
+<li><a href="#data">The eruption data</a></li>
+<li><a href="#forward">The forward model</a></li>
+<li><a href="#structure">structure of the inversion problem</a></li>
+<li><a href="#anneal">The simulated annealing method</a></li>
+<li><a href="#code">The C code</a></li>
+<li><a href="#try">Things to try</a></li>
+</ul>
+</div>
+
+<div class="container">
+<h3 class="text-dark">Introduction</h3>
+<p>
+
+
+</div>
+
+<div id = "data" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+
+<h3 class="text-dark">Cerro Negro eruption data</h3>
+<p>An eruption of Cerro Negro volcano (Nicaragua) took place in April of 1992. The eruption (volcano explosivity index 3) sent tephra to the WSW of the volcano, causing considerable damage to the nearby city of Leon, the second largest city in Nicaragua. </p>
+
+<img src="./cerro_negro1.png" alt="cerro_negro_photo" style="width: 100%; max-width: 750px;" />
+
+Tephra fallout near the volcano exceeded 1 m in thickness. Farther from the volcano, even a few centimeters of tephra accumulation caused collapse of some poorly designed buildings:
+
+<img src="./cerro_negro2.png" alt="cerro_negro_photo" style="width: 100%; max-width: 750px;" />
+
+<p> More details about the eruption are available in:
+   <ul>
+       <li>Connor, C.B., Hill, B.E., Winfrey, B., Franklin, N.M. and Femina, P.C.L., 2001. Estimation of volcanic hazards from tephra fallout. Natural Hazards Review, 2(1), pp.33-42.<a href="https://ascelibrary.org/doi/pdf/10.1061/(ASCE)1527-6988(2001)2%3A1(33)?casa_token=SnEwXoDIKxkAAAAA:ItVGmf2d0DVuGMqBkee16OCjLwm0nDriUCWxCJdDT4DORICMzyY7XRZo1HhsaCpDNDZE7qZH422o">link</a></li>
+   </ul>
+<p>A map of relative tephra thickness as a function of distance from the crater (black triangle), with circle size proportional to mass loading (kg/m2):</p>
+
+<img src="./scatter_map_cn_data.png" alt="cerro_negro_scatter_map" style="width: 100%; max-width: 750px;" />
+
+<p>The data used to create the scatter map (mass loading of tephra as a function of location are available <a href"./cerro_negro_92.dat"> here</a>.</p>
+</div>
+
+<div id = "structure" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+
+<h3 class="text-dark">Structure of the Inversion</h3>
+<p>The basic structure of this inversion is illustrated in the flowchart. Two bits of information are needed:
+<ul>
+    <li> The input data file consists of the x,y, coordinates of the magnetic observations, the observed magnetic value, and, initially, a column of zeros, representing the calculated magnetic anomaly.</li>
+    <li> The initial geometry of the sphere. All parameters are set in this input. Only one parameter (depth in this case) will be adjusted. Note that the sphere parameters are specified in the main () function in the source code in this example. 
+</ul>
+</p>
+<p> With these inputs the main() code calls the function to perform the golden search. Using golden search, the depth parameter is updated, the new magnetic anomaly is calculated and root-mean-square-error is calculated comparing the observed and calculated magnetic values. </p>
+
+<p>If the RMSE is minimized within some tolerance, the optimal depth and RMSE value are printed.</p>
+<img src="./flowchart1.png" alt="overall flowchart" style="width: 100%; max-width: 750px;" />
+</div>
+
+<div id = "golden" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+
+<h3 class="text-dark">The Golden Search Function</h3>
+<p>The golden search function minimizes the root-mean-squared-error (RMSE) between the observed and calculated magnetic anomalies by adjusting the depth (sphere.z in an instance of the Sphere datatype) using the golden-section search algorithm. The golden search algorithm iteratively refines the range of possible depths to find the one that best fits the observed magnetic anomaly data.The golden search method is more efficient than brute force because it iteratively reduces the search space using the golden ratio.</p>
+
+
+<img src="./flowchart2.png" alt="overall flowchart" style="width: 100%; max-width: 500px;" />
+
+<p>The key steps in the golden search algorithm are:
+<ul>
+<li>Initialize the Bounds: Set an initial range for the sphere's depth: $z_{low} = 0.1$ m and $z_{high} = 1000.0$ m in this example.</li>
+<li>Calculate Intermediate Points: Use the golden ratio ($\phi = (1 + \sqrt{5}) / 2$) to define two intermediate depths:
+$$ z_1 = z_{high} - (z_{high} - z_{low}) / \phi $$
+$$ z_2 = z_{low} + (z_{high} - z_{low}) / \phi $$
+</li>
+<li>Iterative Optimization: While the range ($z_{high} - z_{low}$) is larger than the tolerance (tol), repeat:
+<ul>
+<li>Step 1: Assign $z_1$ or $z_2$ to sphere.z (i.e., the sphere's depth).
+<li>Step 2: Compute the RMSE for each depth ($z_1$ and $z_2$) by:
+<ul>
+<li>Calculating the magnetic anomaly at each data point using the function magnetized_sphere_anomaly.
+<li>Comparing the calculated anomaly with observed values using calculate_rmse.
+</ul>
+<li>Step 3: Narrow the search range: If the RMSE at $z_1$ is smaller than at $z_2$, update $z_{high} = z_2$. Otherwise, update $z_{low} = z_1$.
+</ul>
+<li>Terminate When the Interval is Sufficiently Small: The process ends when the difference between $z_{high}$ and $z_{low}$ is smaller than the tolerance, ensuring the result is within the desired precision.
+<li>Return the Optimal Depth: The midpoint of the final interval ($(z_{low} + z_{high}) / 2$) is returned as the optimal depth of the sphere.
+</ul>
+</p>
+
+<p>The golden ratio is $\phi = (1 + \sqrt{5}) / 2 ≈ 1.618$. When an interval is divided using the golden ratio, the proportion of the smaller segment to the larger segment is the same as the proportion of the larger segment to the whole interval. This leads to:
+
+$$\frac{1}{\phi} = \frac{\textrm{smaller interval}}{\textrm{larger interval}} = \frac{\textrm{larger interval}}{\textrm{whole interval}} $$
+
+This means that each iteration of the golden-section search reduces the interval by approximately $1/\phi$, or 61.8 percent.
+
+Since $z_1$ or $z_2$ become the boundary of the next iteration, only one new point is calculated and the other is re-used, making the search more efficient than the brute force approach.
+ </p>
+ <p>Problems come up with golden search if there is not a smooth minimum to the RMSE function over the interval considered. Of course, it is aslo a problem if the true value of the parameter, depth of the sphere center in this case, is outside the range initially considered.</p>
+</div>
+
+<div id = "code" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+<h3 class="text-dark">The <i>C</i> code</h3>
+<p>You need five files to compile and run this code:
+    <ul>
+        <li> The example "observed" magnetic data file: <a href = "./code/mag_sphere.dat">mag_sphere.dat</a>.
+        <li> The main code: <a href = "./code/sphere_golden_search_main.c">sphere_golden_search_main.c</a>.
+        <li> The file containing the functions used: <a href = "./code/sphere_functions.c">sphere_functions.c</a>.
+        <li> The file containing the function prototypes used: <a href = "./code/sphere_functions.h">sphere_functions.h</a>.
+        <li> The makefile: <a href = "./code/Makefile">Makefile</a>.
+
+    </ul>
+</p>
+
+<p>Download these files (all in the same directory). To compile the code, on the command line type: make</p>
+
+<p>To run the code type: ./golden mag_sphere.dat > outputfilename.dat</p>
+
+<p> If all goes well, the first lines of your output file should look like:</p>
+<div class="container bg-light">
+
+<pre class="pre-scrollable">
+<code class="text-success">
+row count read from input file 2000
+Depth : 298.404740
+-1000.000000 0.000000 -5.490345 6.123034
+-999.000000 0.000000 11.391087 6.143127
+-998.000000 0.000000 9.652076 6.163304
+-997.000000 0.000000 10.416932 6.183564
+-996.000000 0.000000 -31.523155 6.203908
+-995.000000 0.000000 -14.734694 6.224337
+-994.000000 0.000000 -29.124724 6.244850
+-993.000000 0.000000 13.037053 6.265449
+-992.000000 0.000000 1.439870 6.286134
+-991.000000 0.000000 -32.364338 6.306905
+</code>
+</pre>
+</div>
+
+<p>In this inversion the optimal solution is found in just a few iterations. In fact, three iterations yield a sphere depth of 305 m and arrive close to the minimum RMSE:</p>
+
+<img src="./rmse_plot.png" alt="rmse plot" style="width: 100%; max-width: 750px;" />
+
+<hr>
+</div>
+
+<div id = "try" class="container pt-2 pb-2" >
+<a href="#top"><i>[Top]</i></a>
+
+<h3 class="text-dark">Things to Try</h3>
+
+<ul>
+<li>Make sure you can download, compile and run the code. Plot up the output to compare the observed and calculated magnetic anomalies.</li>
+<li>Try modifying the code to invert for a different parameter, like the magnitude of the vector of magnetization of the buried sphere. Note that you will have to make changes in the golden search function and in the main function.</li>
+<li>In the current version of the code, the sphere parameters are specified in main(). Try modifying the code so these parameters are read from a configuration file. Hint: see the C shortcourse for an example of reading a configuration file: <a href="https://gscommunitycodes.usf.edu/geoscicommunitycodes/public/c-shortcourse/c-first-examples/data4_c.php">data4.c</a></li>
+</ul>
+<hr>
+</div>
+
+<div id="footer"></div>
+
+<!-- Bootstrap core JavaScript
+================================================== -->
+<!-- Placed at the end of the document so the pages load faster -->
+<!-- JS, Popper.js, and jQuery -->
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js" integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo" crossorigin="anonymous"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js" integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/p5@1.0.0/lib/p5.js"></script>
+<script src="sphere/p5/canvas_gravity_sphere.js"></script>
+<script src=https://gscommunitycodes.usf.edu/geoscicommunitycodes/scripts/gravity_scripts.js></script></body>
+<?php echo "<script src=https://" . $_SERVER['HTTP_HOST'] . "/geoscicommunitycodes/scripts/shortcourse_scripts.js></script>"; ?>
+</div>
+</div>
+</div>
+</body>
+</html>

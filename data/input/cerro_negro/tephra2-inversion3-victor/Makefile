@@ -1,0 +1,20 @@
+CC = gcc
+INCLUDES =
+CFLAGS = -Wall -O3 $(INCLUDES)
+LIBS = -lm -lgc -ldl
+objects = new_tephra.o tephra2_calc.o
+deps = ./common_src/parameters.h ./common_src/common_structures.h 
+
+tephra2_2025:	$(objects)  $(deps)
+		$(CC) $(CFLAGS) -o tephra2_2025 new_tephra.o tephra2_calc.o $(LIBS)
+		
+new_tephra.o:	new_tephra.c $(deps)
+		$(CC) $(CFLAGS) -c new_tephra.c
+
+tephra2_calc.o:	./common_src/tephra2_calc.c $(deps)
+		$(CC) $(CFLAGS) -c ./common_src/tephra2_calc.c $(LIBS)
+
+.PHONY:		clean
+clean:
+		rm -fv *.o
+                

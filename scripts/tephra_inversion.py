@@ -9,9 +9,9 @@ import pandas as pd
 
 from scripts.core.mcmc import metropolis_hastings
 from scripts.core.sa import simulated_annealing
-from scripts.core.enkf import ensemble_smoother_mda
+from scripts.core.es import ensemble_smoother_mda
 from scripts.data_handling.config_io import load_config
-
+from scripts.core.pso import particle_swarm_optimization
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +26,7 @@ class TephraInversion:
     Unified runner for three inversion methods:
       - Metropolis-Hastings (MCMC)
       - Simulated Annealing (SA)
+      - Particle Swarm Optimization (PSO)
       - Ensemble Kalman (ES-MDA style)
 
     Assumes the working inputs already exist under data/input/:
@@ -267,9 +268,44 @@ class TephraInversion:
                 "best_posterior": float(res["posterior"][best_idx]),
             }
 
-        if method in ("enkf", "es-mda", "ens"):
-            ek_def = self.default_config.get("enkf", {})
-            ek_usr = self.config.get("enkf", {})
+        if method == "pso":
+            # uses internal defaults and the same signature as SA, so no extra args needed.
+            pso_def = self.default_config.get("pso", {})
+            pso_usr = self.config.get("pso", {})
+            pso_cfg = {**pso_def, **pso_usr}
+
+            res = particle_swarm_optimization(
+                initial=initial, prior_type=ptype, prior_para=prior_para, draw_scale=draw_scale,
+                runs=int(pso_cfg.get("runs", 2000)),
+                obs=self.observations["observation"].values,
+                sigma=float(pso_cfg.get("likelihood_sigma", 0.6)),
+                conf_path=Path(cfg_path), sites_csv=Path(sites_path),
+                tephra2_exec=Path(tephra2_exec), wind_path=Path(wind_path),
+                T0=float(pso_cfg.get("T0", 1.0)),        # unused but accepted
+                alpha=pso_cfg.get("alpha", None),        # unused but accepted
+                restarts=int(pso_cfg.get("restarts", 0)),
+                seed=pso_cfg.get("seed", None),
+                silent=bool(pso_cfg.get("silent", False)),
+                print_every=int(pso_cfg.get("print_every", 200)),
+                T_end=float(pso_cfg.get("T_end", 0.2)),  # unused but accepted
+            )
+            chain_df = pd.DataFrame(res["chain"], columns=names)
+            best_idx = int(np.nanargmax(res["posterior"]))
+            best_row = chain_df.iloc[best_idx]
+            return {
+                "chain": chain_df,
+                "posterior": res["posterior"],
+                "prior_array": res["prior"],
+                "likelihood_array": res["likelihood"],
+                "acceptance_rate": np.nan,   # not applicable to PSO
+                "burnin": 0,
+                "best_params": best_row,
+                "best_posterior": float(res["posterior"][best_idx]),
+            }
+
+        if method in ("es", "es-mda", "ens"):
+            ek_def = self.default_config.get("es", {})
+            ek_usr = self.config.get("es", {})
             ek = {**ek_def, **ek_usr}
             out = ensemble_smoother_mda(
                 prior_type=ptype, prior_para=prior_para,
