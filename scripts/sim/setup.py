@@ -119,10 +119,10 @@ VENT_ELEVATION {vent_elev:.0f}
 # Note: UTM coordinates are used (add 10,000,000 m in 
 #      northern hemisphere
 #
-PLUME_HEIGHT   {plume_height:.6f}
+PLUME_HEIGHT   {plume_height:.0f}
 ALPHA 2.0
 BETA 2.0
-ERUPTION_MASS  {eruption_mass:.6f}
+ERUPTION_MASS  {eruption_mass:.0f}
 MAX_GRAINSIZE -5
 MIN_GRAINSIZE 5
 MEDIAN_GRAINSIZE 0
@@ -335,6 +335,6 @@ python -m scripts.sim.setup \
   --vent-easting 532400 \
   --vent-northing 1382525 \
   --vent-elev 100 \
-  --plume-height 9133.824318 \
-  --eruption-mass 51729162615.736885
+  --plume-height 7000 \
+  --eruption-mass 2.4e10
 """

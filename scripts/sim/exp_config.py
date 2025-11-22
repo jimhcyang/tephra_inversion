@@ -25,7 +25,7 @@ MODELS = ["mcmc", "sa", "pso", "es"]  # subset this list if you like
 #   - column_height prior std
 #   - eruption_mass prior std
 # Means stay the same; only spread changes.
-PRIOR_STD_FACTORS = [
+PRIOR_FACTORS = [
     4.0,
     3.0,
     2.0,

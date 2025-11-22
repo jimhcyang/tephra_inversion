@@ -25,6 +25,7 @@ wheels/
 
 # Downloaded Files
 cerro_negro_detail_data/
+tephra2-inversion3-victor/
 
 # Virtual Environment
 .venv/

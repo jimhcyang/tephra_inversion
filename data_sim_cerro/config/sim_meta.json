@@ -1,8 +1,0 @@
-{
-  "input_csv": "data_std/cn_std_agg.csv",
-  "vent_easting": 532400.0,
-  "vent_northing": 1382525.0,
-  "vent_elev": 100.0,
-  "plume_height": 9133.824318,
-  "eruption_mass": 51729162615.736885
-}
