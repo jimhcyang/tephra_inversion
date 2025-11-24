@@ -4,7 +4,7 @@ from __future__ import annotations
 # --- Global experiment controls ---------------------------------------------
 
 # Base seed used to generate per-run seeds
-BASE_SEED: int = 20251111
+BASE_SEED: int = 20251125
 
 # How many *independent repetitions* of the whole grid to run
 N_REPEATS: int = 10
@@ -26,17 +26,13 @@ MODELS = ["mcmc", "sa", "pso", "es"]  # subset this list if you like
 #   - eruption_mass prior std
 # Means stay the same; only spread changes.
 PRIOR_FACTORS = [
-    4.0,
-    3.0,
-    2.0,
+    5.0,
+    2.5,
     1.5,
-    1.25,
     1.0,
-    0.8,
     2.0 / 3.0,
-    0.5,
-    1.0 / 3.0,
-    0.25,
+    0.4,
+    0.2,
 ]
 
 # --- SA grid ----------------------------------------------------------------
