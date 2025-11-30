@@ -55,25 +55,32 @@ def _build_param_config(
     scale_mass: float,
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Build a TephraInversion-style parameter config where we ONLY shift the
-    centers (initial value and prior mean) of:
+    Build a TephraInversion-style parameter config for simulations.
 
-      - plume_height
-      - log_mass  (log of eruption_mass)
+    For each PRIOR_FACTOR k, we enforce in *parameter space*:
 
-    and leave the spreads (prior_para_b) and draw_scale unchanged.
+      - plume_height (physical units, m):
+          true_h         = ground-truth plume height
+          center_h       = k_h * true_h
+          prior_mean_h   = center_h
+          initial_value  = center_h
+          prior_std_h    = center_h / 5
+          draw_scale_h   = prior_std_h / 5
 
-    For plume_height:
-      new_center_h = scale_height * true_plume_height
+      - log_mass (log of eruption_mass in kg):
+          true_m         = ground-truth eruption mass (kg)
+          m_center       = k_m * true_m
+          log_m_center   = ln(m_center)
+          prior_mean_logm = log_m_center
+          initial_value   = log_m_center
+          prior_std_logm  = log_m_center / 5
 
-    For eruption_mass:
-      mass_factor  = mass_scale_from_factor(scale_mass)
-      new_mass     = mass_factor * true_eruption_mass
-      log_mass_center = ln(new_mass)
+        For log_mass we KEEP draw_scale from the base config
+        instead of using prior_std/5, to avoid absurd step sizes.
 
     Notes:
-      - 'true_values' in DEFAULT_CONFIG["parameters"] are used as ground truth.
-      - If 'true_values' is absent, we fall back to 'variable' initial_val.
+      - 'true_values' in DEFAULT_CONFIG['parameters'] hold the ground truth.
+      - If missing, we fall back to 'variable' initial_val.
     """
     params_cfg = base_cfg["parameters"]
     var = params_cfg["variable"]
@@ -82,26 +89,35 @@ def _build_param_config(
 
     true_vals = params_cfg.get("true_values", {})
 
-    # --- True plume height & eruption mass ---------------------------------
+    # --- Ground-truth plume height & eruption mass -------------------------
     true_h = float(true_vals.get("plume_height", col["initial_val"]))
     true_m = float(true_vals.get("eruption_mass", em["initial_val"]))
 
-    # --- New centers --------------------------------------------------------
-    # Normal scaling for plume height
+    # --- Centers: factor × ground truth ------------------------------------
+    # Height in physical space
     h_center = float(scale_height) * true_h
 
-    # L-scaling for eruption mass
-    mass_factor = mass_scale_from_factor(scale_mass)
-    m_center = mass_factor * true_m
+    # Mass: scale in physical space, then go to log-space
+    m_center = float(scale_mass) * true_m
+    if m_center <= 0:
+        raise ValueError(f"Scaled eruption mass must be positive, got {m_center}")
     log_m_center = float(np.log(m_center))
 
-    # --- Original spreads & draw scales (unchanged) ------------------------
-    h_std = float(col["prior_para_b"])
-    h_draw = float(col["draw_scale"])
+    # --- Height: prior_std = center/5, draw_scale = prior_std/5 ------------
+    h_std = abs(h_center) / 5.0
+    if h_std <= 0:
+        # Fallback to base config if something degenerates
+        h_std = float(col["prior_para_b"])
+    h_draw = h_std / 5.0
 
-    # For eruption_mass we follow the existing convention used in TephraInversion:
-    # treat prior_para_b as a log-space sigma.
-    m_log_std = float(max(em["prior_para_b"], 1e-6))
+    # --- Log-mass: prior_std = prior_mean/5, draw_scale kept from base -----
+    m_log_mean = log_m_center
+    m_log_std = abs(m_log_mean) / 5.0
+    if m_log_std <= 0:
+        # Fallback to base config prior std (interpreted as log σ)
+        m_log_std = float(max(em["prior_para_b"], 1e-6))
+
+    # Keep draw_scale from base config for log_mass, as discussed
     m_draw = float(em["draw_scale"])
 
     params = {
@@ -113,9 +129,9 @@ def _build_param_config(
             "draw_scale": h_draw,
         },
         "log_mass": {
-            "initial_value": log_m_center,
+            "initial_value": m_log_mean,
             "prior_type": "Gaussian",
-            "prior_mean": log_m_center,
+            "prior_mean": m_log_mean,
             "prior_std": m_log_std,
             "draw_scale": m_draw,
         },

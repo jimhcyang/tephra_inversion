@@ -99,12 +99,28 @@ def _filter_group_rows(
     df: pd.DataFrame,
     spec: GroupSpec,
 ) -> pd.DataFrame:
-    """Return subset of df matching the desired prior factor and hyperparams."""
-    mask = (
-        (df["scale_plume_factor"] == spec.prior_factor)
-        & (df["scale_mass_factor"] == spec.prior_factor)
-    )
+    """
+    Return subset of df matching the desired prior factor and hyperparams.
 
+    If some metadata columns (e.g. scale_plume_factor, scale_mass_factor)
+    are missing because results_*.csv was reconstructed from chains only,
+    we skip those filters and use whatever runs are available.
+    """
+    if df.empty:
+        raise ValueError("Empty results DataFrame passed into _filter_group_rows.")
+
+    # Start from "everything included"
+    mask = np.ones(len(df), dtype=bool)
+
+    # Prior factors (only if columns exist)
+    if "scale_plume_factor" in df.columns:
+        mask &= df["scale_plume_factor"] == spec.prior_factor
+    if "scale_mass_factor" in df.columns:
+        mask &= df["scale_mass_factor"] == spec.prior_factor
+
+    # Hyperparameters (guarded by column existence)
+    if spec.n_iter is not None and "n_iterations" in df.columns:
+        mask &= df["n_iterations"] == spec.n_iter
     if spec.n_iter is not None and "n_iter" in df.columns:
         mask &= df["n_iter"] == spec.n_iter
 
@@ -125,7 +141,10 @@ def _filter_group_rows(
         mask &= df["status"] == "OK"
 
     subset = df.loc[mask].copy()
-    subset.sort_values(["simulation_id", "run_id"], inplace=True)
+    # sort if columns are present
+    sort_cols = [c for c in ["simulation_id", "run_id"] if c in subset.columns]
+    if sort_cols:
+        subset.sort_values(sort_cols, inplace=True)
 
     if subset.empty:
         raise ValueError(f"No runs found for spec={spec} in this results file.")
@@ -170,6 +189,53 @@ def _load_chains_for_group(
 
     return chains, burnin
 
+def _rebuild_results_from_chains(
+    model: str,
+    chains_root: Path,
+) -> pd.DataFrame:
+    """
+    Best-effort reconstruction of a minimal results_<model>.csv
+    from existing chain files.
+
+    We only recover:
+      - run_id
+      - model
+      - (optionally) a dummy simulation_id = 0
+
+    All other metadata (scale factors, hyperparams, etc.) will be absent
+    and thus cannot be filtered on. The aggregator will still work and
+    will simply treat all available runs for that model as one pool.
+    """
+    model_dir = chains_root / model
+    if not model_dir.exists():
+        raise FileNotFoundError(f"No chains directory for model={model}: {model_dir}")
+
+    rows = []
+    for chain_path in sorted(model_dir.glob(f"{model}_run*.csv")):
+        stem = chain_path.stem  # e.g. "sa_run12"
+        try:
+            run_id_str = stem.split("run")[-1]
+            run_id = int(run_id_str)
+        except Exception:
+            # Ignore any weirdly-named files
+            continue
+        rows.append(
+            {
+                "run_id": run_id,
+                "simulation_id": 0,
+                "model": model,
+                # scale_plume_factor / scale_mass_factor etc. are unknown here
+            }
+        )
+
+    if not rows:
+        raise FileNotFoundError(
+            f"No usable chain files found under {model_dir} for model={model}"
+        )
+
+    df = pd.DataFrame(rows)
+    df.sort_values(["simulation_id", "run_id"], inplace=True)
+    return df
 
 # ---------------------------------------------------------------------------
 # Plot routines (multi-trace + averaged marginals)
@@ -452,12 +518,29 @@ def make_demo_plots(
 
     results: List[GroupResult] = []
 
+    chains_root = sim_output_dir / "chains"
+
     for model, specs in demo_specs.items():
         results_path = sim_output_dir / f"results_{model}.csv"
-        if not results_path.exists():
-            raise FileNotFoundError(f"Missing results CSV: {results_path}")
 
-        df_results = pd.read_csv(results_path)
+        # Try primary: results_<model>.csv
+        if results_path.exists():
+            df_results = pd.read_csv(results_path)
+        else:
+            # Fallback: attempt to reconstruct from chains
+            print(f"[WARN] Missing {results_path}; attempting to rebuild from chains/...")
+            try:
+                df_results = _rebuild_results_from_chains(model, chains_root)
+                print(
+                    f"[WARN] Rebuilt minimal results for model={model} from "
+                    f"{len(df_results)} chain file(s)."
+                )
+            except FileNotFoundError as e:
+                # No CSV and no chains: nothing we can do → skip this model
+                print(
+                    f"[WARN] {e}. Skipping model={model} in make_demo_plots()."
+                )
+                continue
 
         for spec in specs:
             subset = _filter_group_rows(df_results, spec)
