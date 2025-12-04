@@ -6,3 +6,4 @@ tqdm
 seaborn
 jupyter
 ipykernel
+plotly
