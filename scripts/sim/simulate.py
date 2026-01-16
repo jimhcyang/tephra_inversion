@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # scripts/sim/simulate.py
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ import importlib
 import time
 import copy
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -14,9 +15,11 @@ import pandas as pd
 from scripts.data_handling.config_io import load_config
 from scripts.tephra_inversion import TephraInversion
 
+
 # Example usage:
 #   python -m scripts.sim.simulate --config-module scripts.sim.exp_config_test
 #   python -m scripts.sim.simulate --config-module scripts.sim.exp_config
+#   python -m scripts.sim.simulate --config-module scripts.sim.exp_config_test --plot-winds
 
 
 def mass_scale_from_factor(scale: float) -> float:
@@ -47,6 +50,68 @@ def mass_scale_from_factor(scale: float) -> float:
         return 10.0 ** (k - 1.0)
     else:
         return 10.0 ** (1.0 - 1.0 / k)
+
+
+def _find_wind_file(input_dir: Path) -> Optional[Path]:
+    """
+    Best-effort search for a wind profile file inside input_dir.
+    Prefers common canonical names; falls back to the first 'wind*.(txt|dat)'.
+    """
+    input_dir = Path(input_dir)
+
+    preferred = [
+        input_dir / "wind.txt",
+        input_dir / "wind.dat",
+        input_dir / "wind_profile.txt",
+        input_dir / "wind_profile.dat",
+    ]
+    for p in preferred:
+        if p.exists() and p.is_file():
+            return p
+
+    for pat in ("wind*.txt", "wind*.dat", "*wind*.txt", "*wind*.dat"):
+        hits = sorted(input_dir.glob(pat))
+        for h in hits:
+            if h.is_file():
+                return h
+
+    return None
+
+
+def _maybe_plot_winds(EXP, out_dir: Path) -> None:
+    """
+    Save a quick wind sanity plot under <SIM_OUTPUT_DIR>/plots/.
+
+    Notes
+    -----
+    - This is intentionally "save-only". If you want inline display in a notebook,
+      display the saved PNG after the subprocess completes.
+    - It relies on scripts.visualization.wind_plots exposing `plot_wind_file`.
+    """
+    try:
+        from scripts.visualization.wind_plots import plot_wind_file  # type: ignore
+
+        input_dir = Path(EXP.SIM_INPUT_DIR)
+        wind_path = _find_wind_file(input_dir)
+
+        if wind_path is None:
+            print(f"[WARN] --plot-winds set, but no wind file found in: {input_dir}")
+            return
+
+        plot_dir = out_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
+        save_path = plot_wind_file(
+            wind_path=wind_path,
+            output_dir=plot_dir,
+            title="Wind profile used by simulation (speed & direction vs altitude)",
+            save_name=f"wind_profile_{wind_path.stem}.png",
+            show_plot=False,
+        )
+        print(f"[OK] wind plot saved: {save_path}")
+
+    except Exception as e:
+        print(f"[WARN] Failed to plot winds: {e}")
 
 
 def _build_param_config(
@@ -85,7 +150,7 @@ def _build_param_config(
     params_cfg = base_cfg["parameters"]
     var = params_cfg["variable"]
     col = var["column_height"]
-    em  = var["eruption_mass"]
+    em = var["eruption_mass"]
 
     true_vals = params_cfg.get("true_values", {})
 
@@ -94,10 +159,8 @@ def _build_param_config(
     true_m = float(true_vals.get("eruption_mass", em["initial_val"]))
 
     # --- Centers: factor × ground truth ------------------------------------
-    # Height in physical space
     h_center = float(scale_height) * true_h
 
-    # Mass: scale in physical space, then go to log-space
     m_center = float(scale_mass) * true_m
     if m_center <= 0:
         raise ValueError(f"Scaled eruption mass must be positive, got {m_center}")
@@ -106,7 +169,6 @@ def _build_param_config(
     # --- Height: prior_std = center/5, draw_scale = prior_std/5 ------------
     h_std = abs(h_center) / 5.0
     if h_std <= 0:
-        # Fallback to base config if something degenerates
         h_std = float(col["prior_para_b"])
     h_draw = h_std / 5.0
 
@@ -114,10 +176,8 @@ def _build_param_config(
     m_log_mean = log_m_center
     m_log_std = abs(m_log_mean) / 5.0
     if m_log_std <= 0:
-        # Fallback to base config prior std (interpreted as log σ)
         m_log_std = float(max(em["prior_para_b"], 1e-6))
 
-    # Keep draw_scale from base config for log_mass, as discussed
     m_draw = float(em["draw_scale"])
 
     params = {
@@ -175,7 +235,6 @@ def _iter_method_configs(model: str, EXP) -> Dict[str, Any]:
         for n_iter in EXP.MCMC_N_ITER:
             yield {
                 "n_iterations": int(n_iter),
-                # keep existing burn-in; you can override here if desired
                 "snapshot": max(int(n_iter) // 10, 1),
             }
 
@@ -206,14 +265,13 @@ def _summarize_run(
 
     if isinstance(best, pd.Series):
         plume_est = float(best.get("plume_height", np.nan))
-        logm_est  = float(best.get("log_mass", np.nan))
-    else:  # dict-like
+        logm_est = float(best.get("log_mass", np.nan))
+    else:
         plume_est = float(best.get("plume_height", np.nan))
-        logm_est  = float(best.get("log_mass", np.nan))
+        logm_est = float(best.get("log_mass", np.nan))
 
-    # Prior means used for this run
     plume_prior_mean = float(param_cfg["plume_height"]["prior_mean"])
-    logm_prior_mean  = float(param_cfg["log_mass"]["prior_mean"])
+    logm_prior_mean = float(param_cfg["log_mass"]["prior_mean"])
 
     row: Dict[str, Any] = {
         "run_id": run_id,
@@ -230,7 +288,6 @@ def _summarize_run(
         "runtime_sec": float(duration),
     }
 
-    # Attach shared method hyperparameters (if present)
     for key in (
         "runs",
         "restarts",
@@ -248,14 +305,13 @@ def _summarize_run(
         if key in method_cfg:
             row[key] = method_cfg[key]
 
-    # Add algorithm-specific stats if available
     if model == "mcmc":
         row["acceptance_rate"] = float(results.get("acceptance_rate", np.nan))
 
     return row
 
 
-def run_all_experiments(EXP) -> None:
+def run_all_experiments(EXP, plot_winds: bool = False) -> None:
     """
     Main loop over:
       - simulation_id in [0, N_REPEATS)
@@ -269,16 +325,17 @@ def run_all_experiments(EXP) -> None:
       - one chain CSV per run under:
           EXP.SIM_OUTPUT_DIR/chains/<model>/<model>_run<run_id>.csv
     """
-    # Ensure output dirs exist
     out_dir = Path(EXP.SIM_OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
     chains_root = out_dir / "chains"
     chains_root.mkdir(parents=True, exist_ok=True)
 
-    # Base config from config/default_config.py
+    # Optional: quick wind sanity plot
+    if plot_winds:
+        _maybe_plot_winds(EXP, out_dir)
+
     base_cfg = load_config()
 
-    # Collect rows per model
     rows_by_model: Dict[str, list[Dict[str, Any]]] = {m: [] for m in EXP.MODELS}
 
     run_counter = 0
@@ -286,7 +343,6 @@ def run_all_experiments(EXP) -> None:
     for sim_id in range(EXP.N_REPEATS):
         for scale_h in EXP.PRIOR_FACTORS:
             for scale_m in EXP.PRIOR_FACTORS:
-                # Build parameter (prior center) config for this factor pair
                 param_cfg = _build_param_config(base_cfg, scale_h, scale_m)
 
                 for model in EXP.MODELS:
@@ -294,44 +350,33 @@ def run_all_experiments(EXP) -> None:
                         run_counter += 1
                         run_id = run_counter
 
-                        # Unique seed per run
                         seed = int(EXP.BASE_SEED + run_counter)
                         np.random.seed(seed)
 
-                        # --- Build full config dict for TephraInversion -------
                         cfg = copy.deepcopy(base_cfg)
 
-                        # override paths for this simulation experiment
                         cfg.setdefault("paths", {})
                         cfg["paths"]["input_dir"] = EXP.SIM_INPUT_DIR
-                        # other paths stay as in default_config; we don't call save_results()
 
-                        # set method selector (matches the 'method' logic in TephraInversion)
                         cfg["method"] = model
 
-                        # merge method-specific overrides
                         method_cfg = cfg.get(model, {}).copy()
                         method_cfg.update(method_cfg_override)
                         cfg[model] = method_cfg
 
-                        # --- Run inversion ------------------------------------
                         inv = TephraInversion(config=cfg)
-                        # Overwrite parameters with our scaled centers
                         inv.config["parameters"] = param_cfg
 
                         t0 = time.perf_counter()
                         results = inv.run_inversion()
                         t1 = time.perf_counter()
-
                         duration = t1 - t0
 
-                        # Save chain for later trace / marginal plots
                         model_chain_dir = chains_root / model
                         model_chain_dir.mkdir(parents=True, exist_ok=True)
                         chain_path = model_chain_dir / f"{model}_run{run_id}.csv"
                         results["chain"].to_csv(chain_path, index=False)
 
-                        # Summarize single run
                         row = _summarize_run(
                             model=model,
                             run_id=run_id,
@@ -346,21 +391,18 @@ def run_all_experiments(EXP) -> None:
                         )
                         rows_by_model[model].append(row)
 
-                        # Minimal progress print
                         print(
                             f"[SIM] run_id={run_id} sim={sim_id} model={model} "
                             f"h_scale={scale_h:.3g} m_scale={scale_m:.3g} "
                             f"runtime={duration:.2f}s"
                         )
 
-    # --- Write per-model CSVs -----------------------------------------------
     for model, rows in rows_by_model.items():
         if not rows:
             continue
         df = pd.DataFrame(rows)
         out_file = out_dir / f"results_{model}.csv"
 
-        # Append if file exists, else create with header
         if out_file.exists():
             df.to_csv(out_file, mode="a", header=False, index=False)
         else:
@@ -380,12 +422,19 @@ def main(argv=None) -> int:
             "(e.g. scripts.sim.exp_config or scripts.sim.exp_config_test)"
         ),
     )
+    parser.add_argument(
+        "--plot-winds",
+        action="store_true",
+        help=(
+            "If set, generate a wind-profile sanity plot from the simulation input wind file "
+            "and save it under <SIM_OUTPUT_DIR>/plots/."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    # Dynamic import of experiment config
     EXP = importlib.import_module(args.config_module)
 
-    run_all_experiments(EXP)
+    run_all_experiments(EXP, plot_winds=args.plot_winds)
     return 0
 
 

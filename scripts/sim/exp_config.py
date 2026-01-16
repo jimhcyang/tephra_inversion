@@ -4,7 +4,7 @@ from __future__ import annotations
 # --- Global experiment controls ---------------------------------------------
 
 # Base seed used to generate per-run seeds
-BASE_SEED: int = 20251124
+BASE_SEED: int = 20260111
 
 # How many *independent repetitions* of the whole grid to run
 N_REPEATS: int = 1
@@ -31,17 +31,17 @@ MODELS = ["mcmc", "sa", "pso", "es"]  # subset this list if you like
 #   prior_std  = prior_mean / 5
 #   draw_scale = prior_std / 5    (for plume_height only; log_mass keeps default draw_scale)
 PRIOR_FACTORS = [
-    2.5,
-    2.0,
-    1.5,
-    1.0,
-    2.0 / 3.0,
-    0.5,
-    0.4,
+    2.00,
+    1.60,
+    1.25,
+    1.00,
+    0.80,
+    0.64,
+    0.50,
 ]
 
 # --- SA grid ----------------------------------------------------------------
-SA_RUNS = [100, 1000]
+SA_RUNS = [1000, 10000]
 SA_RESTARTS = [0, 4]
 # print_every will be set in code as runs // 10 (at least 1)
 

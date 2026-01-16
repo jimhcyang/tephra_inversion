@@ -4,7 +4,7 @@ from __future__ import annotations
 # --- Global experiment controls ---------------------------------------------
 
 # Base seed used to generate per-run seeds
-BASE_SEED: int = 20251122
+BASE_SEED: int = 20260111
 
 # How many *independent repetitions* of the whole grid to run
 N_REPEATS: int = 1
@@ -21,9 +21,9 @@ MODELS = ["mcmc", "sa", "pso", "es"]
 # --- Prior-std scaling factors ----------------------------------------------
 # Smaller smoke-test set: 2x, 1x, 0.5x
 PRIOR_FACTORS = [
-    2.0,
+    1.6,
     1.0,
-    0.5,
+    0.64,
 ]
 
 # --- SA grid ----------------------------------------------------------------

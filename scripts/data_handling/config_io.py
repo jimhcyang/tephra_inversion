@@ -156,7 +156,7 @@ def get_mcmc_setup() -> Dict[str, np.ndarray]:
     """
     Build the arrays that scripts/core/mcmc.py expects.
       - Eruption mass is provided as log_m
-      - Preserves your prior types and scales
+      - Preserves prior types and scales
     Returns:
       {
         "initial_values": np.ndarray,

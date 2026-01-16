@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 
@@ -104,7 +105,64 @@ class WindPlotter:
             plt.close(fig)
 
         return str(save_path)
-    
+
+
+def plot_wind_file(
+    wind_path: Union[str, Path],
+    output_dir: Union[str, Path],
+    *,
+    title: str = "Wind profile (speed & direction vs altitude)",
+    save_name: str = "wind_profile.png",
+    show_plot: bool = False,
+) -> Path:
+    """
+    Convenience wrapper: read a Tephra2-format wind file and plot via WindPlotter.
+
+    Parameters
+    ----------
+    wind_path : str | Path
+        Path to a wind file with columns: HEIGHT SPEED DIRECTION (optional '#' header/comment).
+    output_dir : str | Path
+        Directory where the PNG will be written.
+    title : str
+        Plot title.
+    save_name : str
+        Output filename (PNG).
+    show_plot : bool
+        If True, calls plt.show() (useful when running interactively, not via os.system()).
+
+    Returns
+    -------
+    Path
+        Path to written PNG.
+    """
+    wind_path = Path(wind_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    wind = pd.read_csv(
+        wind_path,
+        sep=r"\s+",
+        comment="#",
+        header=None,
+        names=["HEIGHT", "SPEED", "DIRECTION"],
+        engine="python",
+    )
+
+    wp = WindPlotter(output_dir=str(output_dir))
+    save_path = output_dir / save_name
+
+    wp.plot_wind_profile(
+        heights=wind["HEIGHT"].to_numpy(),
+        speeds=wind["SPEED"].to_numpy(),
+        directions=wind["DIRECTION"].to_numpy(),
+        title=title,
+        save_path=str(save_path),
+        show_plot=show_plot,
+    )
+    return save_path
+
+
 # ---------------------------------------------------------------------- #
 #  Helper - make subplot square (mpl < 3.4 fallback)                     #
 # ---------------------------------------------------------------------- #
