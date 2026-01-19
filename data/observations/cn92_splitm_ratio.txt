@@ -1,0 +1,5 @@
+Computed split ratio from paired (a,b) sites:
+  p_a = 0.571779
+  p_b = 0.428221
+  paired_sites = 21
+  m_sites = 52
