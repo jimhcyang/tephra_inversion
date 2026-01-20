@@ -29,7 +29,7 @@ Author: Jim Yang
 python scripts/data_handling/build_observations.py \
   --cn "data_std/cerro_negro.csv" \
   --kl "data_std/1924 Tephra Physical Volcanology Data.csv" \
-  --outdir "data/observations" \
+  --outdir "data/input/observations" \
   --kl-density 1000
 
 """
@@ -270,7 +270,7 @@ def main() -> int:
                     help="Path to Cerro Negro 1992 CSV")
     ap.add_argument("--kl", type=str, default=str(root / "data" / "raw" / "1924 Tephra Physical Volcanology Data.csv"),
                     help="Path to Kilauea 1924 physical volcanology CSV")
-    ap.add_argument("--outdir", type=str, default=str(root / "data" / "observations"),
+    ap.add_argument("--outdir", type=str, default=str(root / "data" / "input" / "observations"),
                     help="Output directory for observation CSVs")
     ap.add_argument("--kl-density", type=float, default=1000.0,
                     help="Deposit density (kg/m^3) used to convert thickness->kg/m^2 for KL24")
