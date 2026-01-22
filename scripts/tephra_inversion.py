@@ -7,11 +7,40 @@ from typing import Dict, Tuple
 import numpy as np
 import pandas as pd
 
-from scripts.core.mcmc import metropolis_hastings
-from scripts.core.sa import simulated_annealing
-from scripts.core.es import ensemble_smoother_mda
 from scripts.data_handling.config_io import load_config
-from scripts.core.pso import particle_swarm_optimization
+
+# ---------------------------------------------------------------------------
+# Backend entrypoints
+#
+# Your core backends expose these canonical names:
+#   - MCMC: metropolis_hastings
+#   - SA  : simulated_annealing
+#   - PSO : particle_swarm_optimization
+#   - ES  : ensemble_smoother_mda
+#
+# The import errors you hit (mcmc_sampling / particle_swarm) come from older
+# names. We keep a tiny compatibility shim so the orchestration file won't
+# break if you rename internals later.
+# ---------------------------------------------------------------------------
+try:
+    from scripts.core.mcmc import metropolis_hastings  # type: ignore
+except Exception:  # pragma: no cover
+    from scripts.core.mcmc import mcmc_sampling as metropolis_hastings  # type: ignore
+
+try:
+    from scripts.core.sa import simulated_annealing  # type: ignore
+except Exception:  # pragma: no cover
+    from scripts.core.sa import sa_sampling as simulated_annealing  # type: ignore
+
+try:
+    from scripts.core.pso import particle_swarm_optimization  # type: ignore
+except Exception:  # pragma: no cover
+    from scripts.core.pso import particle_swarm as particle_swarm_optimization  # type: ignore
+
+try:
+    from scripts.core.es import ensemble_smoother_mda  # type: ignore
+except Exception:  # pragma: no cover
+    from scripts.core.es import enkf_mda as ensemble_smoother_mda  # type: ignore
 
 logging.basicConfig(
     level=logging.INFO,

@@ -28,11 +28,25 @@ def _safe_float(x: float, default: float) -> float:
         return default
 
 def update_config_file(plume_vec: np.ndarray, conf_path: Union[Path, str]) -> None:
-    """
-    Update *only* PLUME_HEIGHT and ERUPTION_MASS in `tephra2.conf`.
+    """Update key Tephra2 ESP lines in a ``tephra2.conf`` file.
 
-    plume_vec[0] = plume height [m]
-    plume_vec[1] = ln(eruption mass [kg])
+    Parameter conventions used throughout this repository:
+
+    - plume_vec[0] = plume height [m]
+    - plume_vec[1] = **ln(eruption mass [kg])**  (natural log)
+
+    Optional (if provided; enables 4-parameter inversion):
+
+    - plume_vec[2] = TGSD median grain size (PHI)  -> ``MEDIAN_GRAINSIZE``
+    - plume_vec[3] = TGSD std grain size (PHI, >0) -> ``STD_GRAINSIZE``
+
+    Notes
+    -----
+    * If ``MEDIAN_GRAINSIZE`` / ``STD_GRAINSIZE`` are missing from the config file,
+      they will be appended.
+    * We also try to respect ``MAX_GRAINSIZE`` and ``MIN_GRAINSIZE`` (PHI) if present,
+      by clipping the median into that range. ``STD_GRAINSIZE`` is lower-bounded
+      to avoid invalid values.
     """
     # sanitize inputs
     plume_height = _safe_float(plume_vec[0], 7500.0)
@@ -46,6 +60,49 @@ def update_config_file(plume_vec: np.ndarray, conf_path: Union[Path, str]) -> No
     conf_path = Path(conf_path)
     lines = conf_path.read_text().splitlines(keepends=True)
 
+    # Attempt to read grain bounds from file (PHI)
+    max_phi = None
+    min_phi = None
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith("#") or s.startswith("/*"):
+            continue
+        parts = s.split()
+        if len(parts) < 2:
+            continue
+        if parts[0] == "MAX_GRAINSIZE":
+            try:
+                max_phi = float(parts[1])
+            except Exception:
+                max_phi = None
+        elif parts[0] == "MIN_GRAINSIZE":
+            try:
+                min_phi = float(parts[1])
+            except Exception:
+                min_phi = None
+
+    phi_lo = None
+    phi_hi = None
+    if max_phi is not None and min_phi is not None:
+        phi_lo = float(min(max_phi, min_phi))
+        phi_hi = float(max(max_phi, min_phi))
+
+    # Optional grain params (PHI)
+    med_phi = None
+    std_phi = None
+    if len(plume_vec) >= 3:
+        med_phi = _safe_float(plume_vec[2], 0.0)
+        if phi_lo is not None and phi_hi is not None:
+            med_phi = float(np.clip(med_phi, phi_lo, phi_hi))
+    if len(plume_vec) >= 4:
+        std_phi = _safe_float(plume_vec[3], 2.0)
+        # Tephra2 expects STD_GRAINSIZE > 0
+        std_phi = float(max(std_phi, 0.05))
+
+    # Replace existing keys if present
+    found = {"PLUME_HEIGHT": False, "ERUPTION_MASS": False,
+             "MEDIAN_GRAINSIZE": False, "STD_GRAINSIZE": False}
+
     for i, ln in enumerate(lines):
         s = ln.strip()
         if not s or s.startswith("#") or s.startswith("/*"):
@@ -53,11 +110,31 @@ def update_config_file(plume_vec: np.ndarray, conf_path: Union[Path, str]) -> No
         key = s.split()[0]
         if key == "PLUME_HEIGHT":
             lines[i] = f"PLUME_HEIGHT   {plume_height:.6f}\n"
+            found["PLUME_HEIGHT"] = True
         elif key == "ERUPTION_MASS":
             lines[i] = f"ERUPTION_MASS  {eruption_mass:.6f}\n"
+            found["ERUPTION_MASS"] = True
+        elif key == "MEDIAN_GRAINSIZE" and med_phi is not None:
+            lines[i] = f"MEDIAN_GRAINSIZE {med_phi:.6f}\n"
+            found["MEDIAN_GRAINSIZE"] = True
+        elif key == "STD_GRAINSIZE" and std_phi is not None:
+            lines[i] = f"STD_GRAINSIZE {std_phi:.6f}\n"
+            found["STD_GRAINSIZE"] = True
+
+    # Append missing optional keys (keeps forward-compatible with templates)
+    if med_phi is not None and not found["MEDIAN_GRAINSIZE"]:
+        lines.append(f"MEDIAN_GRAINSIZE {med_phi:.6f}\n")
+    if std_phi is not None and not found["STD_GRAINSIZE"]:
+        lines.append(f"STD_GRAINSIZE {std_phi:.6f}\n")
 
     conf_path.write_text("".join(lines))
-    logger.debug("→ conf updated: height=%.1f m, lnM=%.2f", plume_height, log_mass)
+    logger.debug(
+        "→ conf updated: height=%.1f m, lnM=%.2f%s%s",
+        plume_height,
+        log_mass,
+        "" if med_phi is None else f", medPhi={med_phi:.2f}",
+        "" if std_phi is None else f", stdPhi={std_phi:.2f}",
+    )
 
 def ensure_sites_format(sites_csv: Path) -> None:
     """Re-write sites file as space-delimited E N Z."""

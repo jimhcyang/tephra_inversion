@@ -18,7 +18,7 @@ SIM_INPUT_DIR: str = "data_sim_cerro/input"
 SIM_OUTPUT_DIR: str = "data_sim_cerro/experiments"
 
 # Which inversion methods to include in this experiment
-MODELS = ["mcmc", "sa", "pso", "es"]  # subset this list if you like
+MODELS = ["sa", "pso", "es", "mcmc"]  # subset this list if you like
 
 # --- Prior scaling factors -------------------------------------------------
 # Each factor k is applied to the *ground-truth center* of:
@@ -41,20 +41,21 @@ PRIOR_FACTORS = [
 ]
 
 # --- SA grid ----------------------------------------------------------------
+# Just first two for smoke test
 SA_RUNS = [10000]
-SA_RESTARTS = [0, 4]
+SA_RESTARTS = [9]
 # print_every will be set in code as runs // 10 (at least 1)
 
 # --- PSO grid ---------------------------------------------------------------
 PSO_RUNS = [1000]
-PSO_RESTARTS = [0, 4]
+PSO_RESTARTS = [9]
 # print_every will be set in code as runs // 10 (at least 1)
 
 # --- ES-MDA grid ------------------------------------------------------------
-ES_N_ENS = [1000]
-ES_N_ASSIM = [1, 5]
-ES_PRINT_EVERY = 1 # print every assimilation step
+ES_N_ENS = [10000]
+ES_N_ASSIM = [10]
+ES_PRINT_EVERY = 1  # print every assimilation step
 
 # --- MCMC grid --------------------------------------------------------------
-MCMC_N_ITER = [10000, 100000]
+MCMC_N_ITER = [100000]
 # snapshot (print_every) will be set in code as n_iter // 10 (at least 1)

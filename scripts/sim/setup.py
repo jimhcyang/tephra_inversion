@@ -1,132 +1,147 @@
 #!/usr/bin/env python3
+# scripts/sim/setup.py
 from __future__ import annotations
+
 import argparse
 import json
-import sys
+import math
+import shutil
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
 
-# ---------------------------------------------------------------------
-# Helper: interactive float prompt
-# ---------------------------------------------------------------------
-def prompt_float(name: str, default: float | None = None) -> float:
-    """
-    Ask the user for a float value on stdin if not provided via CLI.
-    """
-    while True:
-        if default is not None:
-            raw = input(f"{name} [{default}]: ").strip()
-            if raw == "":
-                return float(default)
-        else:
-            raw = input(f"{name}: ").strip()
+# ----------------------------
+# Helpers
+# ----------------------------
 
-        try:
-            return float(raw)
-        except ValueError:
-            print(f"Could not parse '{raw}' as a number, please try again.", file=sys.stderr)
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-# ---------------------------------------------------------------------
-# 1. sites.csv & observations.csv from aggregated CSV
-# ---------------------------------------------------------------------
-def make_sites_and_obs(
-    input_csv: Path,
-    sites_path: Path,
-    obs_path: Path,
-    default_elev: float = 100.0,
-) -> None:
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def _lower_cols(df: pd.DataFrame) -> dict:
+    return {c.lower(): c for c in df.columns}
+
+
+def _pick_col(df: pd.DataFrame, *cands: str) -> Optional[str]:
+    m = _lower_cols(df)
+    for c in cands:
+        if c.lower() in m:
+            return m[c.lower()]
+    return None
+
+
+def _read_obs_csv_to_arrays(input_csv: Path, elev_default: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Read easting, northing, mass_value from input_csv and write:
-      - sites.csv (E, N, Z) with Z = default_elev
-      - observations.csv (single column of mass_value)
+    Read a raw observation CSV and return easting, northing, elevation, obs arrays.
+
+    Flexible detection:
+      easting:      easting, east, x, Easting
+      northing:     northing, north, y, Northing
+      elevation:    elevation, elev, z, altitude, alt   (optional)
+      observations: observations, obs, mass, load, thickness, mass_value, total(kg/m2), Observations
+
+    NOTE:
+      - We accept site_id columns if present, but DO NOT output them (legacy Tephra2 format).
     """
     df = pd.read_csv(input_csv)
 
-    required = {"easting", "northing", "mass_value"}
-    missing = required - set(df.columns)
+    c_e = _pick_col(df, "easting", "east", "x", "Easting")
+    c_n = _pick_col(df, "northing", "north", "y", "Northing")
+    c_z = _pick_col(df, "elevation", "elev", "z", "altitude", "alt", "Elevation")
+    c_obs = _pick_col(
+        df,
+        "observations", "obs", "mass", "load", "thickness",
+        "mass_value", "total(kg/m2)", "Observations"
+    )
+
+    missing = [name for name, col in [("easting", c_e), ("northing", c_n), ("observations", c_obs)] if col is None]
     if missing:
         raise ValueError(
-            f"{input_csv} is missing required columns: {', '.join(sorted(missing))}"
+            f"Missing required columns in {input_csv.name}: {missing}. "
+            f"Found columns: {list(df.columns)}"
         )
 
-    e = df["easting"].to_numpy(dtype=float)
-    n = df["northing"].to_numpy(dtype=float)
-    z = np.full_like(e, float(default_elev), dtype=float)
-    sites_arr = np.column_stack([e, n, z])
+    e = df[c_e].to_numpy(dtype=float)
+    n = df[c_n].to_numpy(dtype=float)
 
-    obs_arr = df["mass_value"].to_numpy(dtype=float)
+    if c_z is None:
+        z = np.full_like(e, float(elev_default), dtype=float)
+    else:
+        z = df[c_z].to_numpy(dtype=float)
 
-    # space-delimited, no header – Tephra2 expects this format
-    np.savetxt(sites_path, sites_arr, fmt="%.3f")
-    np.savetxt(obs_path, obs_arr, fmt="%.6f")
-
-    print(f"Wrote sites to        {sites_path}  (rows={len(sites_arr)})")
-    print(f"Wrote observations to {obs_path}  (rows={len(obs_arr)})")
+    obs = df[c_obs].to_numpy(dtype=float)
+    return e, n, z, obs
 
 
-# ---------------------------------------------------------------------
-# 2. wind.txt – zero wind every 500 m up to 25 km
-# ---------------------------------------------------------------------
-def make_wind(
-    wind_path: Path,
-    dz: int = 500,
-    z_max: int = 25000,
-    speed: float = 0.0,
-    direction: int = 0,
+def _write_sites_observations_legacy(
+    sites_path: Path,
+    obs_path: Path,
+    e: np.ndarray,
+    n: np.ndarray,
+    z: np.ndarray,
+    obs: np.ndarray,
 ) -> None:
     """
-    Create a simple wind.txt:
-      #HEIGHT SPEED DIRECTION
-      500   0.00  0
-      1000  0.00  0
-      ...
-      25000 0.00  0
+    Legacy Tephra2-style:
+      - sites.csv:        E N Z (3 cols), whitespace-delimited, no header
+      - observations.csv: obs (1 col),   whitespace-delimited, no header
     """
-    heights = np.arange(dz, z_max + 1, dz, dtype=int)
+    sites_arr = np.column_stack([e, n, z])
+    np.savetxt(sites_path, sites_arr, fmt="%.3f")   # matches common Tephra2 input conventions
+    np.savetxt(obs_path, obs, fmt="%.6f")
 
-    with wind_path.open("w") as f:
-        f.write("#HEIGHT\tSPEED\tDIRECTION\n")
-        for h in heights:
-            f.write(f"{h:d} {speed:.2f} {direction:d}\n")
-
-    print(f"Wrote wind profile to {wind_path}  (levels={len(heights)})")
+    print(f"[OK] wrote sites        -> {sites_path} (rows={len(sites_arr)})")
+    print(f"[OK] wrote observations -> {obs_path} (rows={len(obs)})")
 
 
-# ---------------------------------------------------------------------
-# 3. tephra2.conf – template with user-specified vent & plume params
-# ---------------------------------------------------------------------
-def make_tephra2_conf(
-    conf_path: Path,
+def _write_tephra2_conf_full_legacy(
+    out_path: Path,
     vent_easting: float,
     vent_northing: float,
+    vent_elevation: float,
     plume_height: float,
-    eruption_mass: float,
-    vent_elev: float = 100.0,
+    eruption_mass_kg: float,
+    median_grainsize: float,
+    std_grainsize: float,
+    alpha: float,
+    beta: float,
+    min_grainsize: float,
+    max_grainsize: float,
 ) -> None:
     """
-    Write a tephra2.conf identical to your example except for the user-supplied
-    VENT_EASTING, VENT_NORTHING, PLUME_HEIGHT, ERUPTION_MASS (vent elevation
-    optional, default 100 m).
+    Write tephra2.conf with the FULL legacy template (including defaults and comments),
+    matching the style your lab expects.
+
+    Note: We round vent easting/northing/elev to integers like typical Tephra2 examples.
     """
-    txt = f"""VENT_EASTING {vent_easting:.0f}
-VENT_NORTHING {vent_northing:.0f}
-VENT_ELEVATION {vent_elev:.0f}
+    ve = int(round(vent_easting))
+    vn = int(round(vent_northing))
+    vz = int(round(vent_elevation))
+
+    txt = f"""VENT_EASTING {ve}
+VENT_NORTHING {vn}
+VENT_ELEVATION {vz}
 #
 # Note: UTM coordinates are used (add 10,000,000 m in 
 #      northern hemisphere
 #
-PLUME_HEIGHT   {plume_height:.0f}
-ALPHA 2.0
-BETA 2.0
-ERUPTION_MASS  {eruption_mass:.0f}
-MAX_GRAINSIZE -5
-MIN_GRAINSIZE 5
-MEDIAN_GRAINSIZE 0
-STD_GRAINSIZE 2.0
+PLUME_HEIGHT   {plume_height:.6f}
+ALPHA {alpha:g}
+BETA {beta:g}
+ERUPTION_MASS  {eruption_mass_kg:.6f}
+MAX_GRAINSIZE {int(round(max_grainsize))}
+MIN_GRAINSIZE {int(round(min_grainsize))}
+MEDIAN_GRAINSIZE {median_grainsize:g}
+STD_GRAINSIZE {std_grainsize:g}
 
 /*eddy diff for small particles in m2/s (400 cm2/s) */
 EDDY_CONST  0.04
@@ -151,190 +166,145 @@ PART_STEPS 100
 # 2 = beta distribution using parameters alpha and beta (set below)
 PLUME_MODEL 2
 """
-    conf_path.write_text(txt)
-    print(f"Wrote tephra2.conf to {conf_path}")
+    out_path.write_text(txt)
+    print(f"[OK] wrote tephra2.conf -> {out_path}")
 
 
-# ---------------------------------------------------------------------
-# 4. sim_meta.json – minimal scenario description
-# ---------------------------------------------------------------------
-def write_meta(
-    meta_path: Path,
-    *,
-    input_csv: Path,
-    vent_easting: float,
-    vent_northing: float,
-    vent_elev: float,
-    plume_height: float,
-    eruption_mass: float,
-) -> None:
-    meta = {
-        "input_csv": str(input_csv),
-        "vent_easting": float(vent_easting),
-        "vent_northing": float(vent_northing),
-        "vent_elev": float(vent_elev),
-        "plume_height": float(plume_height),
-        "eruption_mass": float(eruption_mass),
-    }
-    meta_path.write_text(json.dumps(meta, indent=2))
-    print(f"Wrote simulation metadata to {meta_path}")
+@dataclass
+class SimMeta:
+    created_at_utc: str
+    input_csv: str
+    wind_source: Optional[str]
+
+    vent_easting: float
+    vent_northing: float
+    vent_elevation: float
+
+    plume_height: float
+    eruption_mass_kg: float
+    ln_mass: float
+
+    median_grainsize: float
+    std_grainsize: float
+    alpha: float
+    beta: float
+    min_grainsize: float
+    max_grainsize: float
 
 
-# ---------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------
-def main():
-    parser = argparse.ArgumentParser(
-        description="Set up a simulation input directory (data_sim-style) for Tephra2 inversion."
-    )
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Build a simulation-ready input tree from one observation CSV.")
+
+    parser.add_argument("input_csv", type=str, help="Raw observation CSV (e.g., data/input/observations/cn92_a.csv)")
+    parser.add_argument("--out-root", type=str, required=True, help="Scenario output root (creates input/ and config/ inside).")
+
+    # Vent / source parameters
+    parser.add_argument("--vent-easting", type=float, required=True)
+    parser.add_argument("--vent-northing", type=float, required=True)
+    parser.add_argument("--vent-elev", type=float, required=True)
+
+    parser.add_argument("--plume-height", type=float, required=True, help="Plume height in meters.")
+    parser.add_argument("--eruption-mass", type=float, default=None, help="Eruption mass in kg (physical units).")
+
+    # Natural log mass (alias: --log-mass, but it is ln(kg), not base-10)
     parser.add_argument(
-        "input_csv",
-        type=str,
-        help="Path to CSV with columns: easting, northing, mass_value "
-             "(e.g. data_std/cn_std_agg.csv).",
-    )
-    parser.add_argument(
-        "--out-root",
-        type=str,
-        default="data_sim",
-        help="Root directory for simulation data (default: data_sim). "
-             "Input files will go in <out-root>/input.",
-    )
-    parser.add_argument(
-        "--vent-easting",
-        type=float,
-        default=None,
-        help="VENT_EASTING (UTM easting). If omitted, will be prompted.",
-    )
-    parser.add_argument(
-        "--vent-northing",
-        type=float,
-        default=None,
-        help="VENT_NORTHING (UTM northing). If omitted, will be prompted.",
-    )
-    parser.add_argument(
-        "--vent-elev",
-        type=float,
-        default=100.0,
-        help="VENT_ELEVATION (m). Default: 100.",
-    )
-    parser.add_argument(
-        "--plume-height",
-        type=float,
-        default=None,
-        help="Initial PLUME_HEIGHT (m) to embed in tephra2.conf. "
-             "If omitted, will be prompted.",
-    )
-    parser.add_argument(
-        "--eruption-mass",
-        type=float,
-        default=None,
-        help="Initial ERUPTION_MASS (kg) to embed in tephra2.conf. "
-             "If omitted, will be prompted.",
-    )
-    parser.add_argument(
-        "--elev-default",
-        type=float,
-        default=100.0,
-        help="Default station elevation (m) for sites.csv (3rd column). Default: 100.",
+        "--ln-mass", "--log-mass", dest="ln_mass", type=float, default=None,
+        help="Natural log of eruption mass in kg. (Alias --log-mass kept for compatibility; it is ln, not log10.)"
     )
 
-    args = parser.parse_args()
+    # Grain-size and plume distribution params
+    parser.add_argument("--median-gs", type=float, required=True)
+    parser.add_argument("--std-gs", type=float, required=True)
+    parser.add_argument("--alpha", type=float, required=True)
+    parser.add_argument("--beta", type=float, required=True)
+    parser.add_argument("--min-gs", type=float, required=True)
+    parser.add_argument("--max-gs", type=float, required=True)
+
+    # Wind
+    parser.add_argument("--wind-src", type=str, default=None, help="Wind file to copy into input/wind.txt")
+
+    # Observation ingestion defaults
+    parser.add_argument("--elev-default", type=float, default=0.0, help="If elevation missing, fill with this value.")
+
+    args = parser.parse_args(argv)
 
     input_csv = Path(args.input_csv)
-    if not input_csv.exists():
-        raise FileNotFoundError(input_csv)
-
-    out_root = Path(args.out_root).resolve()
+    out_root = Path(args.out_root)
     input_dir = out_root / "input"
-    output_dir = out_root / "output"
     config_dir = out_root / "config"
+    _ensure_dir(input_dir)
+    _ensure_dir(config_dir)
 
-    input_dir.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    config_dir.mkdir(parents=True, exist_ok=True)
+    # Decide mass (kg) and ln mass (natural log)
+    if args.eruption_mass is None and args.ln_mass is None:
+        raise ValueError("Provide either --eruption-mass (kg) or --ln-mass/--log-mass (ln(kg)).")
 
-    # 1) sites.csv & observations.csv
-    sites_path = input_dir / "sites.csv"
-    obs_path = input_dir / "observations.csv"
-    make_sites_and_obs(
-        input_csv,
-        sites_path,
-        obs_path,
-        default_elev=args.elev_default,
-    )
+    if args.eruption_mass is not None:
+        eruption_mass_kg = float(args.eruption_mass)
+        if eruption_mass_kg <= 0:
+            raise ValueError("eruption mass must be positive.")
+        ln_mass = float(math.log(eruption_mass_kg))
+    else:
+        ln_mass = float(args.ln_mass)
+        eruption_mass_kg = float(math.exp(ln_mass))
 
-    # 2) wind.txt (zero wind)
-    wind_path = input_dir / "wind.txt"
-    make_wind(wind_path)
-
-    # 3) Ask for vent/plume parameters if not provided
-    vent_easting = (
-        args.vent_easting
-        if args.vent_easting is not None
-        else prompt_float("VENT_EASTING (UTM easting)")
-    )
-    vent_northing = (
-        args.vent_northing
-        if args.vent_northing is not None
-        else prompt_float("VENT_NORTHING (UTM northing)")
-    )
-    plume_height = (
-        args.plume_height
-        if args.plume_height is not None
-        else prompt_float("PLUME_HEIGHT (m)", default=7500.0)
-    )
-    eruption_mass = (
-        args.eruption_mass
-        if args.eruption_mass is not None
-        else prompt_float("ERUPTION_MASS (kg)", default=5e10)
+    # Convert raw obs into legacy Tephra2 input files (no IDs in output)
+    e, n, z, obs = _read_obs_csv_to_arrays(input_csv, elev_default=float(args.elev_default))
+    _write_sites_observations_legacy(
+        sites_path=input_dir / "sites.csv",
+        obs_path=input_dir / "observations.csv",
+        e=e, n=n, z=z, obs=obs,
     )
 
-    # 4) tephra2.conf
-    conf_path = input_dir / "tephra2.conf"
-    make_tephra2_conf(
-        conf_path,
-        vent_easting=vent_easting,
-        vent_northing=vent_northing,
-        plume_height=plume_height,
-        eruption_mass=eruption_mass,
-        vent_elev=args.vent_elev,
+    # Wind file -> input/wind.txt
+    wind_source = None
+    if args.wind_src:
+        wsrc = Path(args.wind_src)
+        if not wsrc.exists():
+            raise FileNotFoundError(f"Wind source not found: {wsrc}")
+        shutil.copyfile(wsrc, input_dir / "wind.txt")
+        wind_source = str(wsrc)
+        print(f"[OK] copied wind -> {input_dir/'wind.txt'} from {wind_source}")
+
+    # Full legacy tephra2.conf
+    _write_tephra2_conf_full_legacy(
+        out_path=input_dir / "tephra2.conf",
+        vent_easting=float(args.vent_easting),
+        vent_northing=float(args.vent_northing),
+        vent_elevation=float(args.vent_elev),
+        plume_height=float(args.plume_height),
+        eruption_mass_kg=float(eruption_mass_kg),
+        median_grainsize=float(args.median_gs),
+        std_grainsize=float(args.std_gs),
+        alpha=float(args.alpha),
+        beta=float(args.beta),
+        min_grainsize=float(args.min_gs),
+        max_grainsize=float(args.max_gs),
     )
 
-    # 5) sim_meta.json
-    meta_path = config_dir / "sim_meta.json"
-    write_meta(
-        meta_path,
-        input_csv=input_csv,
-        vent_easting=vent_easting,
-        vent_northing=vent_northing,
-        vent_elev=args.vent_elev,
-        plume_height=plume_height,
-        eruption_mass=eruption_mass,
+    # Meta (used by simulate.py to fetch “true” values cleanly)
+    meta = SimMeta(
+        created_at_utc=_now_iso(),
+        input_csv=str(input_csv),
+        wind_source=wind_source,
+        vent_easting=float(args.vent_easting),
+        vent_northing=float(args.vent_northing),
+        vent_elevation=float(args.vent_elev),
+        plume_height=float(args.plume_height),
+        eruption_mass_kg=float(eruption_mass_kg),
+        ln_mass=float(ln_mass),
+        median_grainsize=float(args.median_gs),
+        std_grainsize=float(args.std_gs),
+        alpha=float(args.alpha),
+        beta=float(args.beta),
+        min_grainsize=float(args.min_gs),
+        max_grainsize=float(args.max_gs),
     )
+    (config_dir / "sim_meta.json").write_text(json.dumps(asdict(meta), indent=2))
+    print(f"[OK] wrote sim_meta.json -> {config_dir/'sim_meta.json'}")
 
-    print("\nDone.")
-    print(f"Input directory  : {input_dir}")
-    print(f"Output directory : {output_dir}")
-    print(f"Metadata         : {meta_path}")
-    print(
-        "Later, simulate.py can:\n"
-        "  • load config/default_config.py via load_config()\n"
-        "  • override DEFAULT_CONFIG['paths'] to point to this data_sim tree\n"
-        "  • optionally override priors / run lengths, then call TephraInversion(config=...)."
-    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
-
-"""
-python -m scripts.sim.setup \
-  data_std/cn_std_agg.csv \
-  --out-root data_sim_cerro \
-  --vent-easting 532400 \
-  --vent-northing 1382525 \
-  --vent-elev 100 \
-  --plume-height 7000 \
-  --eruption-mass 2.4e10
-"""
+    raise SystemExit(main())

@@ -7,6 +7,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 
 from .sim_types import GroupSpec
 from .results_io import (
@@ -16,18 +17,31 @@ from .results_io import (
     filter_group_rows,
 )
 
+
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     """
     Convert a hex color like '#1f77b4' to an 'rgba(r,g,b,a)' CSS string.
     """
     hex_color = hex_color.lstrip("#")
     if len(hex_color) != 6:
-        # Fallback: just return black with given alpha
         return f"rgba(0,0,0,{alpha})"
     r = int(hex_color[0:2], 16)
     g = int(hex_color[2:4], 16)
     b = int(hex_color[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
+
+
+def _get_lnM_estimate_array(subset: pd.DataFrame) -> np.ndarray:
+    """
+    Canonical column is lnM_estimate.
+    For backward compatibility, accept legacy logm_estimate too.
+    """
+    if "lnM_estimate" in subset.columns:
+        return subset["lnM_estimate"].to_numpy(dtype=float)
+    if "logm_estimate" in subset.columns:
+        return subset["logm_estimate"].to_numpy(dtype=float)
+    raise KeyError("subset is missing lnM_estimate/logm_estimate.")
+
 
 def _collect_summary_points(
     sim_output_dir: str | Path,
@@ -36,22 +50,20 @@ def _collect_summary_points(
     max_configs: int = 4,
 ) -> pd.DataFrame:
     """
-    Build a DataFrame with one row per (model, prior_h, prior_m, config_index),
-    summarising the *median* plume and mass estimates across repeats.
+    One row per (model, prior_h, prior_m, config_index), summarising the MEDIAN
+    plume and mass estimates across repeats.
 
     Columns:
-        model, config_index, prior_h, prior_m,
-        plume_est, mass_est, group_id
+        model, config_index, prior_h, prior_m, plume_est, mass_est, group_id
     """
     sim_output_dir = Path(sim_output_dir)
-
     records: list[dict] = []
 
     for model in models:
         model_l = model.lower()
 
-        # Load once per model
-        df, _ = load_results_df(model=model_l, sim_output_dir=sim_output_dir, allow_minimal=True)
+        # IMPORTANT: pass EXP so any "rebuild from chains" uses the right config loops
+        df, _ = load_results_df(model=model_l, sim_output_dir=sim_output_dir, EXP=EXP)
         df_model = df[df["model"].str.lower() == model_l].copy()
         if df_model.empty:
             continue
@@ -83,12 +95,8 @@ def _collect_summary_points(
                         continue
 
                     plume_est = subset["plume_estimate"].to_numpy(dtype=float)
-                    logm_est = subset["logm_estimate"].to_numpy(dtype=float)
-                    mass_est = np.exp(logm_est)
-
-                    # Median across repeats for plotting
-                    median_plume = float(np.nanmedian(plume_est))
-                    median_mass = float(np.nanmedian(mass_est))
+                    lnM_est = _get_lnM_estimate_array(subset)
+                    mass_est = np.exp(lnM_est)
 
                     records.append(
                         dict(
@@ -96,8 +104,8 @@ def _collect_summary_points(
                             config_index=int(config_index),
                             prior_h=float(scale_h),
                             prior_m=float(scale_m),
-                            plume_est=median_plume,
-                            mass_est=median_mass,
+                            plume_est=float(np.nanmedian(plume_est)),
+                            mass_est=float(np.nanmedian(mass_est)),
                             group_id=f"{model_l}_h{scale_h}_m{scale_m}",
                         )
                     )
@@ -117,17 +125,14 @@ def make_interactive_scatter_all_models(
     max_configs: int = 4,
 ) -> go.Figure:
     """
-    Build an interactive scatter plot:
+    Interactive scatter:
 
-    - x-axis: plume height estimate (m)
-    - y-axis: eruption mass estimate (kg)
-    - One point per (model, prior_h, prior_m, config_index) — up to
-      49 priors × 4 configs per model.
+    - x: plume height estimate (m)
+    - y: eruption mass estimate (kg), log-scale
+    - One point per (model, prior_h, prior_m, config_index)
     - Colour: model
-    - Size: config_index (0–3), with small absolute sizes
-    - For each (model, prior_h, prior_m), the 4 configs are connected
-      by a line (so hovering highlights the little trajectory).
-    - The true source is shown as a red star at (true_plume_height, true_eruption_mass).
+    - Size: config_index
+    - True source: star
     """
     sim_output_dir = Path(sim_output_dir)
 
@@ -141,20 +146,18 @@ def make_interactive_scatter_all_models(
     if df_points.empty:
         raise ValueError("No summary points could be constructed for the requested models.")
 
-    # Map config_index -> marker size (all relatively small)
     size_map = {0: 6, 1: 8, 2: 10, 3: 12}
 
-    # Colours per model
     color_map = {
-        "mcmc": "#1f77b4",  # blue
-        "sa": "#ff7f0e",    # orange
-        "pso": "#2ca02c",   # green
-        "es": "#d62728",    # red
+        "mcmc": "#1f77b4",
+        "sa": "#ff7f0e",
+        "pso": "#2ca02c",
+        "es": "#d62728",
     }
 
     fig = go.Figure()
 
-    # One trace per (model, prior_h, prior_m) group: markers + line
+    # One trace per (model, prior_h, prior_m). Hover JS will toggle markers+lines on that trace.
     for (model, prior_h, prior_m), g in df_points.groupby(["model", "prior_h", "prior_m"]):
         g_sorted = g.sort_values("config_index")
 
@@ -164,9 +167,8 @@ def make_interactive_scatter_all_models(
 
         sizes = [size_map.get(int(ci), 8) for ci in config_idx]
         model_color = color_map.get(model, "gray")
-        hover_bg = _hex_to_rgba(model_color, 0.2)  # same color, low alpha
+        hover_bg = _hex_to_rgba(model_color, 0.2)
 
-        # customdata used in hovertemplate
         customdata = np.column_stack(
             [
                 g_sorted["model"].to_numpy(),
@@ -180,14 +182,14 @@ def make_interactive_scatter_all_models(
             go.Scatter(
                 x=xs,
                 y=ys,
-                mode="markers",  # no line by default
+                mode="markers",
                 marker=dict(
                     size=sizes,
                     color=model_color,
                     symbol="circle",
                     opacity=0.8,
                 ),
-                showlegend=False,   # legend handled separately
+                showlegend=False,
                 legendgroup=model,
                 hovertemplate=(
                     "Model: %{customdata[0]}<br>"
@@ -201,12 +203,12 @@ def make_interactive_scatter_all_models(
                 customdata=customdata,
                 hoverlabel=dict(
                     bgcolor=hover_bg,
-                    bordercolor=hover_bg,  # same color, faint border
+                    bordercolor=hover_bg,
                 ),
             )
         )
 
-    # Add a single legend entry per model (dummy points)
+    # Legend entries (dummy points)
     for model in models:
         model_l = model.lower()
         model_color = color_map.get(model_l, "gray")
@@ -215,12 +217,7 @@ def make_interactive_scatter_all_models(
                 x=[None],
                 y=[None],
                 mode="markers",
-                marker=dict(
-                    size=10,
-                    color=model_color,
-                    symbol="circle",
-                    opacity=0.9,
-                ),
+                marker=dict(size=10, color=model_color, symbol="circle", opacity=0.9),
                 showlegend=True,
                 name=model_l.upper(),
                 legendgroup=model_l,
@@ -228,7 +225,7 @@ def make_interactive_scatter_all_models(
             )
         )
 
-    # True source point as red star
+    # True source point
     fig.add_trace(
         go.Scatter(
             x=[true_plume_height],
@@ -259,33 +256,24 @@ def make_interactive_scatter_all_models(
         template="plotly_white",
     )
 
-    # Default: log-scale for eruption mass
     fig.update_yaxes(type="log")
-
     return fig
 
-import plotly.io as pio
 
-
-def write_hover_interactive_html(fig: go.Figure, out_html: Path):
+def write_hover_interactive_html(fig: go.Figure, out_html: Path) -> None:
     """
-    Write the given figure to an HTML file where:
-      - group traces are markers only by default,
-      - on hover, the hovered trace gets a connecting line and full opacity,
-      - all other group traces fade to low opacity.
-
-    This uses Plotly JS event handlers injected via `post_script`.
+    Write an HTML file with hover behavior:
+      - on hover: hovered trace becomes markers+lines and full opacity
+      - others fade
     """
     div_id = "interactive-scatter-div"
 
-    # JS: add hover/unhover callbacks
     post_script = f"""
     var gd = document.getElementById('{div_id}');
     if (!gd) {{
         console.warn("Plotly div not found for id {div_id}");
     }} else {{
 
-        // Save default modes and opacities
         var defaultModes = [];
         var defaultOpacities = [];
         for (var i = 0; i < gd.data.length; i++) {{
@@ -306,7 +294,6 @@ def write_hover_interactive_html(fig: go.Figure, out_html: Path):
             for (var i = 0; i < gd.data.length; i++) {{
                 var d = gd.data[i];
 
-                // Keep "True source" and legend-only traces unchanged
                 var isTrue = (d.name === "True source");
                 var isLegendOnly = (d.x && d.x.length === 1 && d.x[0] === null);
 
@@ -340,6 +327,7 @@ def write_hover_interactive_html(fig: go.Figure, out_html: Path):
     }}
     """
 
+    out_html = Path(out_html)
     html_str = pio.to_html(
         fig,
         include_plotlyjs="cdn",
@@ -347,10 +335,9 @@ def write_hover_interactive_html(fig: go.Figure, out_html: Path):
         div_id=div_id,
         post_script=post_script,
     )
-
-    out_html = Path(out_html)
     out_html.write_text(html_str, encoding="utf-8")
     print(f"Wrote interactive HTML with hover behavior to {out_html}")
+
 
 if __name__ == "__main__":
     from . import exp_config as EXP  # or exp_config_test
@@ -368,7 +355,9 @@ if __name__ == "__main__":
         max_configs=4,
     )
 
-    out_html = sim_output_dir.parent / "interactive_scatter_all_models_hover.html"
+    # Keep outputs *inside* the experiment directory so multi-scenario runs
+    # don't overwrite each other.
+    out_html = sim_output_dir / "interactive_scatter_all_models_hover.html"
     write_hover_interactive_html(fig, out_html)
 
-# python -m scripts.sim.interactive_scatter
+    # python -m scripts.sim.interactive_scatter

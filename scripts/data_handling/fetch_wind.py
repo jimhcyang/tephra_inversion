@@ -449,7 +449,7 @@ EVENTS: Dict[str, EventPreset] = {
         source="era5",
         input_tz="America/Managua",
         start_local="1992-04-09T23:20",
-        end_local="1992-04-12T18:00",
+        end_local="1992-04-15T18:00",
         step_hours=3,
     ),
     "TEST_20CR_KILAUEA_1924": EventPreset(
