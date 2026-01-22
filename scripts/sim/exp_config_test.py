@@ -36,7 +36,7 @@ INVERT_N_PARAMS = 4
 # Grid structure
 # -----------------------------------------------------------------------------
 N_REPEATS = 1
-BASE_SEED = 123
+BASE_SEED = 20261122
 
 # Prior mean mis-centering factors applied to true values.
 # simulate.py uses a 2D grid of (scale_height, scale_mass).
@@ -47,26 +47,28 @@ PRIOR_FACTORS = [1.0]
 # -----------------------------------------------------------------------------
 # Keep this small for smoke tests.
 MODELS = [
+    "sa",
+    "pso",
+    "es",
     "mcmc",
-    # "sa",
-    # "pso",
-    # "es",
 ]
 
-# ---- SA ----
-SA_RUNS = [200]
-SA_RESTARTS = [1]
+# --- SA grid ----------------------------------------------------------------
+# Just first two for smoke test
+SA_RUNS = [10000]
+SA_RESTARTS = [9]
+# print_every will be set in code as runs // 10 (at least 1)
 
-# ---- PSO ----
-PSO_RUNS = [150]
-PSO_RESTARTS = [1]
+# --- PSO grid ---------------------------------------------------------------
+PSO_RUNS = [1000]
+PSO_RESTARTS = [9]
+# print_every will be set in code as runs // 10 (at least 1)
 
-# ---- ES-MDA ----
-ES_N_ENS = [50]
-ES_N_ASSIM = [4]
-ES_PRINT_EVERY = 10
+# --- ES-MDA grid ------------------------------------------------------------
+ES_N_ENS = [10000]
+ES_N_ASSIM = [10]
+ES_PRINT_EVERY = 1  # print every assimilation step
 
-# ---- MCMC ----
-# Keep low for smoke tests; increase for real runs.
-MCMC_N_ITER = [1000]
-
+# --- MCMC grid --------------------------------------------------------------
+MCMC_N_ITER = [100000]
+# snapshot (print_every) will be set in code as n_iter // 10 (at least 1)

@@ -39,24 +39,23 @@ from scripts.tephra_inversion import TephraInversion
 PLUME_TRUE_WITHIN_NSIGMA: float = 2.0
 # Base fractional uncertainty (relative), used when we don't want a super-wide prior
 PLUME_PRIOR_STD_FRAC: float = 0.20     # e.g., 20% of a typical scale
-PLUME_PRIOR_STD_MIN_M: float = 800.0   # never narrower than this
-PLUME_PRIOR_STD_MAX_M: float = 6000.0  # never wider than this
+PLUME_PRIOR_STD_MIN_M: float = 500.0   # never narrower than this
+PLUME_PRIOR_STD_MAX_M: float = 5000.0  # never wider than this
 # Draw scale as fraction of std
-PLUME_DRAW_FRAC_OF_STD: float = 0.10
-PLUME_DRAW_MIN_M: float = 50.0
-PLUME_DRAW_MAX_M: float = 1200.0
+PLUME_DRAW_FRAC_OF_STD: float = 0.25
+PLUME_DRAW_MIN_M: float = 125.0
+PLUME_DRAW_MAX_M: float = 1250.0
 
 # -----------------------------------------------------------------------------
 # LOG MASS (natural log kg)
 # -----------------------------------------------------------------------------
 LOGM_TRUE_WITHIN_NSIGMA: float = 2.0
-# A good default: at ~2σ you cover ~10x multiplicative error.
-LOGM_PRIOR_STD_DEFAULT: float = float(np.log(10.0) / 2.0)  # ~1.1513
-LOGM_PRIOR_STD_MIN: float = 0.30
-LOGM_PRIOR_STD_MAX: float = 3.00
-LOGM_DRAW_FRAC_OF_STD: float = 0.20
-LOGM_DRAW_MIN: float = 0.02
-LOGM_DRAW_MAX: float = 0.60
+LOGM_PRIOR_STD_DEFAULT: float = 1.0
+LOGM_PRIOR_STD_MIN: float = 0.2
+LOGM_PRIOR_STD_MAX: float = 2.0
+LOGM_DRAW_FRAC_OF_STD: float = 0.5
+LOGM_DRAW_MIN: float = 0.1
+LOGM_DRAW_MAX: float = 1.0
 
 # -----------------------------------------------------------------------------
 # GRAIN SIZE (PHI)
@@ -64,16 +63,16 @@ LOGM_DRAW_MAX: float = 0.60
 # Used only if invert_n_params == 4.
 GRAIN_MED_MIN: float = -6.0
 GRAIN_MED_MAX: float = 6.0
-GRAIN_STD_MIN: float = 0.10
-GRAIN_STD_MAX: float = 3.00
+GRAIN_STD_MIN: float = 0.1
+GRAIN_STD_MAX: float = 3.0
 
 # Prior widths (phi)
 GRAIN_MED_PRIOR_STD: float = 1.0
 GRAIN_STD_PRIOR_STD: float = 0.5
 
 # Proposal / draw scales (phi)
-GRAIN_MED_DRAW_FRAC_OF_STD: float = 0.25
-GRAIN_STD_DRAW_FRAC_OF_STD: float = 0.25
+GRAIN_MED_DRAW_FRAC_OF_STD: float = 0.5
+GRAIN_STD_DRAW_FRAC_OF_STD: float = 0.5
 
 # Parameter names expected by TephraInversion / forward wrapper.
 GRAIN_MED_PARAM_NAME: str = "median_grain"

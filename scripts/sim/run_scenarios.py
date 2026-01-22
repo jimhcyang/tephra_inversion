@@ -48,7 +48,7 @@ KL_LON = -155.287
 
 # CN92 DRE constants (used to compute mass at top)
 CN_DRE_VOL_KM3 = 0.03
-CN_DRE_DENSITY_KG_M3 = 1024.0
+CN_DRE_DENSITY_KG_M3 = 2500
 CN_TOTAL_MASS_KG = CN_DRE_VOL_KM3 * 1e9 * CN_DRE_DENSITY_KG_M3  # 0.03 km^3 -> m^3 -> kg
 
 # Split ratio file (optional; if present we parse it, else we use your provided values)
